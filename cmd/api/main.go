@@ -1,0 +1,123 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"kaleido-project/db/sqlc"
+	"kaleido-project/internal/api"
+	"kaleido-project/internal/config"
+	"kaleido-project/internal/contracts"
+	"kaleido-project/internal/eth"
+	"kaleido-project/internal/loans"
+)
+
+var version = "dev"
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		slog.Error("startup failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	logger := slog.Default()
+	logger.Info("configuration loaded", "config", cfg, "version", version)
+
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelStartup()
+
+	conn, err := db.Open(startupCtx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	ethClient, err := eth.Dial(startupCtx, cfg.EthRPCURL, cfg.ChainID, cfg.DeployerPrivateKey)
+	if err != nil {
+		return fmt.Errorf("initialize ethereum client: %w", err)
+	}
+	logger.Info("ethereum client initialized",
+		"signer_address", ethClient.SignerAddress().Hex(),
+		"chain_id", ethClient.ChainID().String(),
+	)
+
+	queries := db.New(conn)
+	lockManager := db.NewLockManager(queries)
+	lockHolder := fmt.Sprintf("%s:%d", hostname(), os.Getpid())
+	contractRepo := contracts.NewRepository(queries, conn)
+	contractService := contracts.NewService(
+		contractRepo,
+		ethClient,
+		lockManager,
+		cfg.LoanBaseURI,
+		lockHolder,
+	)
+	loanRepo := loans.NewRepository(queries, conn)
+	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder)
+
+	server := &http.Server{
+		Addr: ":" + cfg.Port,
+		Handler: api.New(version, logger, api.Options{
+			ReadinessChecks: []api.ReadinessCheck{
+				{
+					Name:  "database",
+					Check: db.Checker{DB: conn}.Check,
+				},
+				{
+					Name:  "ethereum",
+					Check: ethClient.Check,
+				},
+			},
+			Contracts: contractService,
+			Loans:     loanService,
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		logger.Info("starting API", "addr", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- err
+		}
+	}()
+
+	select {
+	case err := <-serverErrors:
+		return fmt.Errorf("server error: %w", err)
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		logger.Info("shutdown complete")
+	}
+	return nil
+}
+
+func hostname() string {
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		return "api"
+	}
+	return name
+}

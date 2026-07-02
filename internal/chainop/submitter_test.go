@@ -1,0 +1,234 @@
+package chainop
+
+import (
+	"context"
+	"errors"
+	"math/big"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
+
+	db "kaleido-project/db/sqlc"
+	"kaleido-project/internal/eth"
+)
+
+func TestSubmitSuccess(t *testing.T) {
+	tx := newTestTx()
+	journal := &fakeJournal{}
+	locks := &fakeLockQueries{}
+	backend := fakeBackend{
+		receipt: &types.Receipt{
+			Status: types.ReceiptStatusSuccessful,
+			TxHash: tx.Hash(),
+		},
+	}
+
+	releasedBeforeReceipt := false
+	backend.onReceipt = func() { releasedBeforeReceipt = locks.releaseCalls == 1 }
+	writer := &fakeWriter{backend: backend}
+	submitter := NewSubmitter(writer, db.NewLockManager(locks), "test-holder", journal)
+
+	var gotNonce *big.Int
+	txHash, receipt, err := submitter.Submit(context.Background(), 42, "test",
+		func(auth *bind.TransactOpts, _ eth.ContractBackend) (*types.Transaction, error) {
+			gotNonce = auth.Nonce
+			return tx, nil
+		})
+
+	require.NoError(t, err)
+	require.Equal(t, tx.Hash().Hex(), txHash)
+	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+	require.Equal(t, int64(7), gotNonce.Int64())
+
+	require.NotNil(t, journal.submitted)
+	require.Equal(t, int64(42), journal.submitted.ID)
+	require.Equal(t, tx.Hash().Hex(), *journal.submitted.TxHash)
+	require.Equal(t, int64(7), *journal.submitted.Nonce)
+	require.Equal(t, int64(42), journal.minedID)
+	require.Nil(t, journal.retryable)
+	require.Equal(t, 1, locks.releaseCalls)
+	require.True(t, releasedBeforeReceipt)
+}
+
+func TestSubmitLockBusy(t *testing.T) {
+	journal := &fakeJournal{}
+	locks := &fakeLockQueries{acquireErr: pgx.ErrNoRows}
+	submitter := newTestSubmitter(journal, locks, nil)
+
+	_, _, err := submitter.Submit(context.Background(), 42, "test", neverSend(t))
+
+	require.ErrorIs(t, err, db.ErrLockBusy)
+	require.Nil(t, journal.submitted)
+	require.NotNil(t, journal.retryable)
+	require.Equal(t, int64(42), journal.retryable.ID)
+}
+
+func TestSubmitSendFailure(t *testing.T) {
+	journal := &fakeJournal{}
+	locks := &fakeLockQueries{}
+	submitter := newTestSubmitter(journal, locks, nil)
+
+	sendErr := errors.New("execution reverted")
+	_, _, err := submitter.Submit(context.Background(), 42, "test",
+		func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+			return nil, sendErr
+		})
+
+	require.ErrorIs(t, err, sendErr)
+	require.Contains(t, err.Error(), "test on chain")
+	require.Nil(t, journal.submitted)
+	require.NotNil(t, journal.retryable)
+	require.Contains(t, *journal.retryable.Error, "execution reverted")
+	require.Equal(t, 1, locks.releaseCalls)
+}
+
+func TestSubmitRevertedTransaction(t *testing.T) {
+	tx := newTestTx()
+	journal := &fakeJournal{}
+	locks := &fakeLockQueries{}
+	submitter := newTestSubmitter(journal, locks, &types.Receipt{
+		Status: types.ReceiptStatusFailed,
+		TxHash: tx.Hash(),
+	})
+
+	_, _, err := submitter.Submit(context.Background(), 42, "test",
+		func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+			return tx, nil
+		})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "test transaction failed")
+	require.NotNil(t, journal.submitted)
+	require.Zero(t, journal.minedID)
+	require.NotNil(t, journal.retryable)
+}
+
+func TestSubmitUsesUniqueHolderPerAcquisition(t *testing.T) {
+	tx := newTestTx()
+	journal := &fakeJournal{}
+	locks := &fakeLockQueries{}
+	submitter := newTestSubmitter(journal, locks, &types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		TxHash: tx.Hash(),
+	})
+
+	send := func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+		return tx, nil
+	}
+	_, _, err := submitter.Submit(context.Background(), 1, "test", send)
+	require.NoError(t, err)
+	_, _, err = submitter.Submit(context.Background(), 2, "test", send)
+	require.NoError(t, err)
+
+	require.Len(t, locks.acquireHolders, 2)
+	require.NotEqual(t, locks.acquireHolders[0], locks.acquireHolders[1])
+	for _, holder := range locks.acquireHolders {
+		require.Contains(t, holder, "test-holder#")
+	}
+}
+
+func TestRetryableRecordsAndReturnsError(t *testing.T) {
+	journal := &fakeJournal{}
+	submitter := newTestSubmitter(journal, &fakeLockQueries{}, nil)
+
+	cause := errors.New("boom")
+	err := submitter.Retryable(context.Background(), 42, cause)
+
+	require.Same(t, cause, err)
+	require.NotNil(t, journal.retryable)
+	require.Equal(t, int64(42), journal.retryable.ID)
+	require.Equal(t, "boom", *journal.retryable.Error)
+}
+
+func newTestSubmitter(journal *fakeJournal, locks *fakeLockQueries, receipt *types.Receipt) *Submitter {
+	writer := &fakeWriter{backend: fakeBackend{receipt: receipt}}
+	return NewSubmitter(writer, db.NewLockManager(locks), "test-holder", journal)
+}
+
+func newTestTx() *types.Transaction {
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	return types.NewTx(&types.LegacyTx{Nonce: 7, To: &to, Gas: 21000, GasPrice: big.NewInt(0), Value: big.NewInt(0)})
+}
+
+func neverSend(t *testing.T) func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+	return func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+		t.Fatal("send must not be called")
+		return nil, nil
+	}
+}
+
+type fakeWriter struct {
+	backend eth.ContractBackend
+}
+
+func (f *fakeWriter) SignerAddress() common.Address {
+	return common.HexToAddress("0x1111111111111111111111111111111111111111")
+}
+
+func (f *fakeWriter) ChainID() *big.Int { return big.NewInt(1337) }
+
+func (f *fakeWriter) PendingNonce(context.Context) (uint64, error) { return 7, nil }
+
+func (f *fakeWriter) TransactOpts(_ context.Context, nonce uint64) (*bind.TransactOpts, error) {
+	return &bind.TransactOpts{Nonce: new(big.Int).SetUint64(nonce)}, nil
+}
+
+func (f *fakeWriter) Backend() (eth.ContractBackend, error) { return f.backend, nil }
+
+// fakeBackend embeds the interface so only the methods the submitter actually uses need real implementations.
+type fakeBackend struct {
+	eth.ContractBackend
+	receipt   *types.Receipt
+	onReceipt func()
+}
+
+func (f fakeBackend) TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error) {
+	if f.onReceipt != nil {
+		f.onReceipt()
+	}
+	return f.receipt, nil
+}
+
+type fakeJournal struct {
+	submitted *db.SetOperationSubmittedParams
+	minedID   int64
+	retryable *db.SetOperationRetryableParams
+}
+
+func (f *fakeJournal) SetOperationSubmitted(_ context.Context, arg db.SetOperationSubmittedParams) (db.ChainOperation, error) {
+	f.submitted = &arg
+	return db.ChainOperation{ID: arg.ID}, nil
+}
+
+func (f *fakeJournal) SetOperationMined(_ context.Context, id int64) (db.ChainOperation, error) {
+	f.minedID = id
+	return db.ChainOperation{ID: id}, nil
+}
+
+func (f *fakeJournal) SetOperationRetryable(_ context.Context, arg db.SetOperationRetryableParams) (db.ChainOperation, error) {
+	f.retryable = &arg
+	return db.ChainOperation{ID: arg.ID}, nil
+}
+
+type fakeLockQueries struct {
+	acquireErr     error
+	acquireHolders []string
+	releaseCalls   int
+}
+
+func (f *fakeLockQueries) AcquireAppLock(_ context.Context, arg db.AcquireAppLockParams) (db.AppLock, error) {
+	f.acquireHolders = append(f.acquireHolders, arg.Holder)
+	if f.acquireErr != nil {
+		return db.AppLock{}, f.acquireErr
+	}
+	return db.AppLock{Name: arg.Name, Holder: arg.Holder, ExpiresAt: arg.ExpiresAt}, nil
+}
+
+func (f *fakeLockQueries) ReleaseAppLock(context.Context, db.ReleaseAppLockParams) error {
+	f.releaseCalls++
+	return nil
+}

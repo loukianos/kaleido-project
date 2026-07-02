@@ -1,0 +1,47 @@
+services:
+  api:
+    build:
+      context: .
+      target: runtime
+      args:
+        VERSION: local
+    environment:
+      PORT: "${PORT:-8080}"
+      ETH_RPC_URL: "${API_ETH_RPC_URL:-http://host.docker.internal:31545}"
+      CHAIN_ID: "${CHAIN_ID:-1337}"
+      DATABASE_URL: "${DATABASE_URL:-postgres://loan_notes:loan_notes@postgres:5432/loan_notes?sslmode=disable}"
+      LOAN_BASE_URI: "${LOAN_BASE_URI:-http://localhost:8080/loans/}"
+      DEPLOYER_PRIVATE_KEY: "${DEPLOYER_PRIVATE_KEY:-0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: loan_notes
+      POSTGRES_PASSWORD: loan_notes
+      POSTGRES_DB: loan_notes
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loan_notes -d loan_notes"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres-data:
