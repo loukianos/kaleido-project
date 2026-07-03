@@ -38,6 +38,14 @@ make contracts-build # compile
 make contracts-deploy # deploy LoanNote to local Besu via Hardhat Ignition, not actually used for the demo, more for dev/debugging
 ```
 
+Go bindings for `LoanNote` are generated from the compiled Hardhat artifact using [go-ethereum's `abigen`](https://geth.ethereum.org/docs/tools/abigen).
+
+```bash
+make bindings
+```
+
+Bindings are committed, so they only need to be rebuilt by contributors who change the contract.
+
 ## Configuration
 
 Configuration is read from environment variables.
@@ -76,17 +84,6 @@ make sqlc
 ```
 
 In a real project we might handle this with a pre-commit hook that watches the directory that `sqlc.yaml` watches.
-
-## Contract bindings
-
-Go bindings for `LoanNote` are generated from the compiled Hardhat artifact using [go-ethereum's `abigen`](https://geth.ethereum.org/docs/tools/abigen).
-
-```bash
-make bindings
-```
-
-Same as SQLC, we might handle this with a pre-commit hook normally.
-Bindings are committed, so they only need to be rebuilt by contributors who change the contract.
 
 ## OpenAPI
 
