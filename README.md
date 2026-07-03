@@ -17,10 +17,10 @@ Each token represents a lender's claim to repayment.
 ## Quick start
 
 ```bash
-make paladin-up # start the local blockchain network
+make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
 make demo # run a simple demo that checks readiness, deploys a contract, originates two loans, repays one, defaults the other, prints results
-make dev-down # teardown database an API
+make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
 
@@ -30,8 +30,7 @@ Generated code is committed, so you don't need to regenerate sqlc or contract bi
 
 ## Smart contract
 
-The ERC-721 contract (OpenZeppelin 5.2.0, Solidity 0.8.28) lives in `contracts/`, built with Hardhat.
-The local Hardhat deploy helper uses Ignition against the configured Besu JSON-RPC network.
+The ERC-721 contract (OpenZeppelin 5.2.0, Solidity 0.8.28) lives in `contracts/`, built with [Hardhat](https://hardhat.org/).
 
 ```bash
 make contracts-install # npm install
@@ -42,7 +41,7 @@ make contracts-deploy # deploy LoanNote to local Besu via Hardhat Ignition, not 
 ## Configuration
 
 Configuration is read from environment variables.
-For hardhat and docker compose, we load env from `.env` for convenience
+For hardhat and docker compose, we load env from `.env` for convenience.
 `.env.example` is ready to copy to `.env` and uses throwaway private keys for valid but unfunded addresses.
 Our application loads defaults that match `.env` but we could just as easily fail startup when the requisite env isn't present.
 
@@ -58,14 +57,14 @@ Our application loads defaults that match `.env` but we could just as easily fai
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
-Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock
-keyed by chain id and signer address.
+Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock keyed by chain id and signer address.
 That keeps multiple API instances from submitting transactions with the same nonce while leaving the runtime itself stateless.
 Nonce management is kind of tricky and could be mitigated by using one deployer key per API instance.
 
 ## Database
 
-Postgres stores deployed contract records, loan projections, repayments, chain operation state, and coarse app locks. The compose stack exposes the dev database on `localhost:5432`.
+Postgres stores deployed contract records, loan projections, repayments, chain operation state, and coarse app locks.
+The compose stack exposes the dev database on `localhost:5432`.
 Migrations are handled by [goose](https://github.com/pressly/goose).
 
 ## SQL generation
@@ -80,14 +79,14 @@ In a real project we might handle this with a pre-commit hook that watches the d
 
 ## Contract bindings
 
-Go bindings for `LoanNote` are generated from the compiled Hardhat artifact using go-ethereum's `abigen`.
+Go bindings for `LoanNote` are generated from the compiled Hardhat artifact using [go-ethereum's `abigen`](https://geth.ethereum.org/docs/tools/abigen).
 
 ```bash
 make bindings
 ```
 
-The generated Go binding is committed under `internal/contracts` so normal Go
-builds do not require Node.js.
+Same as SQLC, we might handle this with a pre-commit hook normally.
+Bindings are committed, so they only need to be rebuilt by contributors who change the contract.
 
 ## API
 
@@ -100,9 +99,9 @@ builds do not require Node.js.
 | `GET`  | `/contracts/active`       | Read active contract metadata                                         |
 | `POST` | `/loans`                  | Originate a loan note and mint its corresponding NFT                  |
 | `GET`  | `/loans`                  | List loans by optional lender/status filters                          |
-| `GET`  | `/loans/{id}`             | Read one loan                                                         |
+| `GET`  | `/loans/{id}`             | Read one loan by ID                                                   |
 | `POST` | `/loans/{id}/transfer`    | Transfer loan to a new lender onchain                                 |
-| `POST` | `/loans/{id}/default`     | Mark an active loan defaulted on chain and in the API                 |
+| `POST` | `/loans/{id}/default`     | Mark an active loan defaulted onchain  and in the API                 |
 | `POST` | `/loans/{id}/repayments`  | Record a repayment; final payment settles the loan and burns the note |
 | `GET`  | `/loans/{id}/repayments`  | List repayments for a loan                                            |
 | `GET`  | `/loans/{id}/terms`       | Terms JSON target for `tokenURI`                                      |
