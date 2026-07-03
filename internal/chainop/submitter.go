@@ -66,7 +66,7 @@ func (s *Submitter) Submit(
 	if err != nil {
 		return "", nil, s.Retryable(ctx, opID, err)
 	}
-	defer release(ctx)
+	defer func() { _ = release(ctx) }()
 
 	backend, err := s.chain.Backend()
 	if err != nil {
