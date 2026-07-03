@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -19,9 +23,13 @@ func main() {
 }
 
 func run() error {
-	apiURL := cmp.Or(os.Getenv("API_URL"), "http://localhost:8080")
-	lender := cmp.Or(os.Getenv("LENDER_ADDRESS"), "0x627306090abaB3A6e1400e9345bC60c78a8BEf57")
-	newLender := cmp.Or(os.Getenv("NEW_LENDER_ADDRESS"), "0x1111111111111111111111111111111111111111")
+	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("load .env: %w", err)
+	}
+
+	apiURL := getenv("API_URL", "http://localhost:8080")
+	lender := getenv("LENDER_ADDRESS", "0x627306090abaB3A6e1400e9345bC60c78a8BEf57")
+	newLender := getenv("NEW_LENDER_ADDRESS", "0x1111111111111111111111111111111111111111")
 
 	api := client{baseURL: apiURL, http: &http.Client{Timeout: 1 * time.Minute}}
 
@@ -139,8 +147,6 @@ func (c client) post(path string, body any, out any) error {
 	return c.do(req, out)
 }
 
-// do sends the request, pretty-prints the JSON response, and decodes it into
-// out when out is non-nil.
 func (c client) do(req *http.Request, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -169,4 +175,8 @@ func (c client) do(req *http.Request, out any) error {
 		}
 	}
 	return nil
+}
+
+func getenv(key, fallback string) string {
+	return cmp.Or(os.Getenv(key), fallback)
 }
