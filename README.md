@@ -85,7 +85,7 @@ make sqlc
 
 In a real project we might handle this with a pre-commit hook that watches the directory that `sqlc.yaml` watches.
 
-## OpenAPI
+## Swagger
 
 The Swagger definition is generated with [swag](https://github.com/swaggo/swag) from annotations on the handlers in `internal/api` and served with [gin-swagger](https://github.com/swaggo/gin-swagger).
 Browse the UI at `/swagger/index.html`, which loads the spec from `/swagger/doc.json`.
