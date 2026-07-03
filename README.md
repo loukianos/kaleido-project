@@ -88,23 +88,18 @@ make bindings
 Same as SQLC, we might handle this with a pre-commit hook normally.
 Bindings are committed, so they only need to be rebuilt by contributors who change the contract.
 
-## API
+## OpenAPI
 
-| Method | Path                      | Description                                                           |
-|--------|---------------------------|-----------------------------------------------------------------------|
-| `GET`  | `/`                       | Service name and build version                                        |
-| `GET`  | `/healthz`                | Liveness probe (`{"status":"ok"}`)                                    |
-| `GET`  | `/ready`                  | Readiness probe with start time and sub-checks                        |
-| `POST` | `/admin/contracts/deploy` | Deploy and activate `LoanNote` contract                               |
-| `GET`  | `/contracts/active`       | Read active contract metadata                                         |
-| `POST` | `/loans`                  | Originate a loan note and mint its corresponding NFT                  |
-| `GET`  | `/loans`                  | List loans by optional lender/status filters                          |
-| `GET`  | `/loans/{id}`             | Read one loan by ID                                                   |
-| `POST` | `/loans/{id}/transfer`    | Transfer loan to a new lender onchain                                 |
-| `POST` | `/loans/{id}/default`     | Mark an active loan defaulted onchain  and in the API                 |
-| `POST` | `/loans/{id}/repayments`  | Record a repayment; final payment settles the loan and burns the note |
-| `GET`  | `/loans/{id}/repayments`  | List repayments for a loan                                            |
-| `GET`  | `/loans/{id}/terms`       | Terms JSON target for `tokenURI`                                      |
+The Swagger definition is generated with [swag](https://github.com/swaggo/swag) from annotations on the handlers in `internal/api` and served with [gin-swagger](https://github.com/swaggo/gin-swagger).
+Browse the UI at `/swagger/index.html`, which loads the spec from `/swagger/doc.json`.
+Static copies of the spec are generated and committed at `docs/swagger.json` and `docs/swagger.yaml`.
+
+```bash
+make swagger # regenerate staitc swagger pages
+```
+
+Like sqlc and the contract bindings, the generated `docs/` output is committed; regenerate it when handler annotations change.
+
 
 ## Testing
 

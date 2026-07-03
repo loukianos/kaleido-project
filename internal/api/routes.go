@@ -5,6 +5,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
+	// Imported for its side effect: registering the generated OpenAPI
+	// definition with the swag runtime, where gin-swagger reads it.
+	_ "kaleido-project/docs"
 )
 
 // addRoutes maps the entire API surface in one place.
@@ -14,6 +20,7 @@ func addRoutes(router *gin.Engine, version string, logger *slog.Logger, opts Opt
 	router.GET("/", handleIndex(version))
 	router.GET("/healthz", handleHealthz())
 	router.GET("/ready", handleReady(logger, startedAt, opts.ReadinessChecks, opts.Contracts))
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.POST("/admin/contracts/deploy", handleDeployContract(logger, opts.Contracts))
 	router.GET("/contracts/active", handleActiveContract(logger, opts.Contracts))
 	router.POST("/loans", handleCreateLoan(logger, opts.Loans))

@@ -1,0 +1,512 @@
+definitions:
+  api.contractResponse:
+    properties:
+      active:
+        type: boolean
+      address:
+        type: string
+      base_uri:
+        type: string
+      chain_id:
+        type: integer
+      deploy_tx_hash:
+        type: string
+      id:
+        type: integer
+    type: object
+  api.createLoanRequest:
+    properties:
+      apr_bps:
+        type: integer
+      borrower_ref:
+        type: string
+      lender_address:
+        type: string
+      principal_minor:
+        type: integer
+      term_days:
+        type: integer
+    type: object
+  api.createRepaymentRequest:
+    properties:
+      amount_minor:
+        type: integer
+      external_ref:
+        type: string
+    type: object
+  api.deployContractRequest:
+    properties:
+      base_uri:
+        type: string
+    type: object
+  api.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  api.healthResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+  api.loanResponse:
+    properties:
+      apr_bps:
+        type: integer
+      borrower_ref:
+        type: string
+      id:
+        type: integer
+      interest_due_minor:
+        type: integer
+      lender_address:
+        type: string
+      operation_id:
+        type: integer
+      outstanding_minor:
+        type: integer
+      owner_address:
+        type: string
+      principal_minor:
+        type: integer
+      status:
+        type: string
+      term_days:
+        type: integer
+      token_id:
+        type: string
+      total_due_minor:
+        type: integer
+      tx_hash:
+        type: string
+    type: object
+  api.loansListResponse:
+    properties:
+      loans:
+        items:
+          $ref: '#/definitions/api.loanResponse'
+        type: array
+    type: object
+  api.readinessResponse:
+    properties:
+      active_contract:
+        type: string
+      checks:
+        additionalProperties:
+          type: string
+        type: object
+      started_at:
+        example: "2026-01-02T15:04:05Z"
+        type: string
+      status:
+        example: ready
+        type: string
+    type: object
+  api.repaymentResponse:
+    properties:
+      amount_minor:
+        type: integer
+      created_at:
+        type: string
+      external_ref:
+        type: string
+      id:
+        type: integer
+      loan_id:
+        type: integer
+    type: object
+  api.repaymentResultResponse:
+    properties:
+      loan:
+        $ref: '#/definitions/api.loanResponse'
+      repayment:
+        $ref: '#/definitions/api.repaymentResponse'
+      settlement_operation_id:
+        type: integer
+      settlement_tx_hash:
+        type: string
+    type: object
+  api.repaymentsListResponse:
+    properties:
+      repayments:
+        items:
+          $ref: '#/definitions/api.repaymentResponse'
+        type: array
+    type: object
+  api.serviceInfoResponse:
+    properties:
+      service:
+        type: string
+      version:
+        type: string
+    type: object
+  api.termsResponse:
+    properties:
+      apr_bps:
+        type: integer
+      interest_due_minor:
+        type: integer
+      principal_minor:
+        type: integer
+      term_days:
+        type: integer
+      total_due_minor:
+        type: integer
+    type: object
+  api.transferLoanRequest:
+    properties:
+      to_address:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: API for managing ERC-721-backed loan notes
+  title: Loan Note API
+  version: 0.1.0
+paths:
+  /:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.serviceInfoResponse'
+      summary: Service metadata
+      tags:
+      - system
+  /admin/contracts/deploy:
+    post:
+      consumes:
+      - application/json
+      description: Deploys a LoanNote contract and makes it active. At most one contract
+        can exist per chain. Subsequent deploys fail with a conflict error message.
+      parameters:
+      - description: Optional base URI override. Empty body uses the configured default
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/api.deployContractRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.contractResponse'
+        "400":
+          description: Invalid JSON body
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "409":
+          description: A contract is already deployed for this chain
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "503":
+          description: Another chain operation is in progress, retry shortly
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Deploy LoanNote contract
+      tags:
+      - contracts
+  /contracts/active:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.contractResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Active contract
+      tags:
+      - contracts
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.healthResponse'
+      summary: Liveness probe
+      tags:
+      - system
+  /loans:
+    get:
+      parameters:
+      - description: Filter by lender address (case-insensitive)
+        in: query
+        name: lender
+        type: string
+      - description: Filter by loan status
+        enum:
+        - originating
+        - active
+        - settling
+        - repaid
+        - defaulted
+        in: query
+        name: status
+        type: string
+      - default: 50
+        description: Page size
+        in: query
+        maximum: 100
+        minimum: 1
+        name: limit
+        type: integer
+      - description: Result offset
+        in: query
+        minimum: 0
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loansListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: List loans
+      tags:
+      - loans
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Loan to originate
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.createLoanRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.loanResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "409":
+          description: No active contract deployed
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "503":
+          description: Another chain operation is in progress, retry shortly
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Originate a loan note
+      tags:
+      - loans
+  /loans/{id}:
+    get:
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loanResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Get loan
+      tags:
+      - loans
+  /loans/{id}/default:
+    post:
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loanResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "409":
+          description: Loan is not active
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "503":
+          description: Another chain operation is in progress, retry shortly
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Mark loan defaulted
+      tags:
+      - loans
+  /loans/{id}/repayments:
+    get:
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.repaymentsListResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: List repayments
+      tags:
+      - loans
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Repayment to record
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.createRepaymentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.repaymentResultResponse'
+        "400":
+          description: Invalid amount or overpayment
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "409":
+          description: Loan not active or duplicate external_ref
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "503":
+          description: Another chain operation is in progress, retry shortly
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Record repayment
+      tags:
+      - loans
+  /loans/{id}/terms:
+    get:
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.termsResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Loan terms for tokenURI
+      tags:
+      - loans
+  /loans/{id}/transfer:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Loan ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Transfer target
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.transferLoanRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.loanResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "409":
+          description: Loan is not transferable
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+        "503":
+          description: Another chain operation is in progress, retry shortly
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      summary: Transfer loan note
+      tags:
+      - loans
+  /ready:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.readinessResponse'
+        "503":
+          description: One or more readiness checks failed
+          schema:
+            $ref: '#/definitions/api.readinessResponse'
+      summary: Readiness probe
+      tags:
+      - system
+swagger: "2.0"

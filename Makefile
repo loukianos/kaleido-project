@@ -22,6 +22,11 @@ bindings: contracts-build
 test:
 	go test -race ./...
 
+.PHONY: swagger
+swagger:
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 fmt -d internal/api -g server.go
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -d internal/api -g server.go -o docs
+
 .PHONY: demo
 demo:
 	go run ./cmd/demo

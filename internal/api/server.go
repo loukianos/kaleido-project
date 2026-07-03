@@ -22,6 +22,9 @@ type Options struct {
 	Loans           LoansService
 }
 
+// @title			Loan Note API
+// @version		0.1.0
+// @description	API for managing ERC-721-backed loan notes
 func New(version string, logger *slog.Logger, opts Options) http.Handler {
 	if opts.Loans == nil || opts.Contracts == nil {
 		panic("api: Options.Loans and Options.Contracts are required")
@@ -50,23 +53,59 @@ func requestLogger(logger *slog.Logger) gin.HandlerFunc {
 	}
 }
 
+type serviceInfoResponse struct {
+	Service string `json:"service"`
+	Version string `json:"version"`
+}
+
+type healthResponse struct {
+	Status string `json:"status" example:"ok"`
+}
+
+type readinessResponse struct {
+	Status         string            `json:"status" example:"ready"`
+	StartedAt      string            `json:"started_at" example:"2026-01-02T15:04:05Z"`
+	ActiveContract string            `json:"active_contract,omitempty"`
+	Checks         map[string]string `json:"checks"`
+}
+
+// handleIndex reports service metadata.
+//
+//	@Summary	Service metadata
+//	@Tags		system
+//	@Produce	json
+//	@Success	200	{object}	serviceInfoResponse
+//	@Router		/ [get]
 func handleIndex(version string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, map[string]string{
-			"service": "kaleido-project-api",
-			"version": version,
+		c.JSON(http.StatusOK, serviceInfoResponse{
+			Service: "kaleido-project-api",
+			Version: version,
 		})
 	}
 }
 
+// handleHealthz is the liveness probe.
+//
+//	@Summary	Liveness probe
+//	@Tags		system
+//	@Produce	json
+//	@Success	200	{object}	healthResponse
+//	@Router		/healthz [get]
 func handleHealthz() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, map[string]string{
-			"status": "ok",
-		})
+		c.JSON(http.StatusOK, healthResponse{Status: "ok"})
 	}
 }
 
+// handleReady is the readiness probe; it runs the injected dependency checks.
+//
+//	@Summary	Readiness probe
+//	@Tags		system
+//	@Produce	json
+//	@Success	200	{object}	readinessResponse
+//	@Failure	503	{object}	readinessResponse	"One or more readiness checks failed"
+//	@Router		/ready [get]
 func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []ReadinessCheck, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -93,14 +132,14 @@ func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []Rea
 			status = "not_ready"
 		}
 
-		body := map[string]any{
-			"status":     status,
-			"started_at": startedAt.Format(time.RFC3339),
-			"checks":     checks,
+		body := readinessResponse{
+			Status:    status,
+			StartedAt: startedAt.Format(time.RFC3339),
+			Checks:    checks,
 		}
 		contract, err := contracts.ActiveContract(ctx)
 		if err == nil {
-			body["active_contract"] = contract.Address
+			body.ActiveContract = contract.Address
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			logger.WarnContext(ctx, "active contract lookup failed",
 				slog.String("error", err.Error()),
@@ -111,6 +150,10 @@ func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []Rea
 	}
 }
 
-func errorBody(msg string) map[string]string {
-	return map[string]string{"error": msg}
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+func errorBody(msg string) errorResponse {
+	return errorResponse{Error: msg}
 }

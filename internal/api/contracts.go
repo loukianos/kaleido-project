@@ -23,6 +23,19 @@ type deployContractRequest struct {
 	BaseURI string `json:"base_uri"`
 }
 
+// handleDeployContract deploys the LoanNote contract and records it active.
+//
+//	@Summary		Deploy LoanNote contract
+//	@Description	Deploys a LoanNote contract and makes it active. At most one contract can exist per chain. Subsequent deploys fail with a conflict error message.
+//	@Tags			contracts
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		deployContractRequest	false	"Optional base URI override. Empty body uses the configured default"
+//	@Success		201		{object}	contractResponse
+//	@Failure		400		{object}	errorResponse	"Invalid JSON body"
+//	@Failure		409		{object}	errorResponse	"A contract is already deployed for this chain"
+//	@Failure		503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Router			/admin/contracts/deploy [post]
 func handleDeployContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req deployContractRequest
@@ -51,6 +64,14 @@ func handleDeployContract(logger *slog.Logger, contracts ContractsService) gin.H
 	}
 }
 
+// handleActiveContract reads the active contract's metadata.
+//
+//	@Summary	Active contract
+//	@Tags		contracts
+//	@Produce	json
+//	@Success	200	{object}	contractResponse
+//	@Failure	404	{object}	errorResponse
+//	@Router		/contracts/active [get]
 func handleActiveContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		contract, err := contracts.ActiveContract(c.Request.Context())

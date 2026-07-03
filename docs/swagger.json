@@ -1,0 +1,783 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "API for managing ERC-721-backed loan notes",
+        "title": "Loan Note API",
+        "contact": {},
+        "version": "0.1.0"
+    },
+    "paths": {
+        "/": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Service metadata",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.serviceInfoResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/contracts/deploy": {
+            "post": {
+                "description": "Deploys a LoanNote contract and makes it active. At most one contract can exist per chain. Subsequent deploys fail with a conflict error message.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contracts"
+                ],
+                "summary": "Deploy LoanNote contract",
+                "parameters": [
+                    {
+                        "description": "Optional base URI override. Empty body uses the configured default",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.deployContractRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.contractResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON body",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "A contract is already deployed for this chain",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Another chain operation is in progress, retry shortly",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/contracts/active": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contracts"
+                ],
+                "summary": "Active contract",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.contractResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/healthz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Liveness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.healthResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "List loans",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by lender address (case-insensitive)",
+                        "name": "lender",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "originating",
+                            "active",
+                            "settling",
+                            "repaid",
+                            "defaulted"
+                        ],
+                        "type": "string",
+                        "description": "Filter by loan status",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Page size",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "minimum": 0,
+                        "type": "integer",
+                        "description": "Result offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.loansListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Originate a loan note",
+                "parameters": [
+                    {
+                        "description": "Loan to originate",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.createLoanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.loanResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "No active contract deployed",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Another chain operation is in progress, retry shortly",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Get loan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.loanResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans/{id}/default": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Mark loan defaulted",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.loanResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Loan is not active",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Another chain operation is in progress, retry shortly",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans/{id}/repayments": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "List repayments",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.repaymentsListResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Record repayment",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Repayment to record",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.createRepaymentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.repaymentResultResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid amount or overpayment",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Loan not active or duplicate external_ref",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Another chain operation is in progress, retry shortly",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans/{id}/terms": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Loan terms for tokenURI",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.termsResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/loans/{id}/transfer": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "loans"
+                ],
+                "summary": "Transfer loan note",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Loan ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Transfer target",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.transferLoanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.loanResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Loan is not transferable",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Another chain operation is in progress, retry shortly",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/ready": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Readiness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.readinessResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "One or more readiness checks failed",
+                        "schema": {
+                            "$ref": "#/definitions/api.readinessResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.contractResponse": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "address": {
+                    "type": "string"
+                },
+                "base_uri": {
+                    "type": "string"
+                },
+                "chain_id": {
+                    "type": "integer"
+                },
+                "deploy_tx_hash": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.createLoanRequest": {
+            "type": "object",
+            "properties": {
+                "apr_bps": {
+                    "type": "integer"
+                },
+                "borrower_ref": {
+                    "type": "string"
+                },
+                "lender_address": {
+                    "type": "string"
+                },
+                "principal_minor": {
+                    "type": "integer"
+                },
+                "term_days": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.createRepaymentRequest": {
+            "type": "object",
+            "properties": {
+                "amount_minor": {
+                    "type": "integer"
+                },
+                "external_ref": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.deployContractRequest": {
+            "type": "object",
+            "properties": {
+                "base_uri": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.healthResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "example": "ok"
+                }
+            }
+        },
+        "api.loanResponse": {
+            "type": "object",
+            "properties": {
+                "apr_bps": {
+                    "type": "integer"
+                },
+                "borrower_ref": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "interest_due_minor": {
+                    "type": "integer"
+                },
+                "lender_address": {
+                    "type": "string"
+                },
+                "operation_id": {
+                    "type": "integer"
+                },
+                "outstanding_minor": {
+                    "type": "integer"
+                },
+                "owner_address": {
+                    "type": "string"
+                },
+                "principal_minor": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "term_days": {
+                    "type": "integer"
+                },
+                "token_id": {
+                    "type": "string"
+                },
+                "total_due_minor": {
+                    "type": "integer"
+                },
+                "tx_hash": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.loansListResponse": {
+            "type": "object",
+            "properties": {
+                "loans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.loanResponse"
+                    }
+                }
+            }
+        },
+        "api.readinessResponse": {
+            "type": "object",
+            "properties": {
+                "active_contract": {
+                    "type": "string"
+                },
+                "checks": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "started_at": {
+                    "type": "string",
+                    "example": "2026-01-02T15:04:05Z"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "ready"
+                }
+            }
+        },
+        "api.repaymentResponse": {
+            "type": "object",
+            "properties": {
+                "amount_minor": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "external_ref": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "loan_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.repaymentResultResponse": {
+            "type": "object",
+            "properties": {
+                "loan": {
+                    "$ref": "#/definitions/api.loanResponse"
+                },
+                "repayment": {
+                    "$ref": "#/definitions/api.repaymentResponse"
+                },
+                "settlement_operation_id": {
+                    "type": "integer"
+                },
+                "settlement_tx_hash": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.repaymentsListResponse": {
+            "type": "object",
+            "properties": {
+                "repayments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.repaymentResponse"
+                    }
+                }
+            }
+        },
+        "api.serviceInfoResponse": {
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.termsResponse": {
+            "type": "object",
+            "properties": {
+                "apr_bps": {
+                    "type": "integer"
+                },
+                "interest_due_minor": {
+                    "type": "integer"
+                },
+                "principal_minor": {
+                    "type": "integer"
+                },
+                "term_days": {
+                    "type": "integer"
+                },
+                "total_due_minor": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.transferLoanRequest": {
+            "type": "object",
+            "properties": {
+                "to_address": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

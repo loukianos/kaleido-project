@@ -34,6 +34,18 @@ type createLoanRequest struct {
 	TermDays       int64  `json:"term_days"`
 }
 
+// handleCreateLoan originates a loan and mints its note on chain.
+//
+//	@Summary	Originate a loan note
+//	@Tags		loans
+//	@Accept		json
+//	@Produce	json
+//	@Param		request	body		createLoanRequest	true	"Loan to originate"
+//	@Success	201		{object}	loanResponse
+//	@Failure	400		{object}	errorResponse
+//	@Failure	409		{object}	errorResponse	"No active contract deployed"
+//	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Router		/loans [post]
 func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req createLoanRequest
@@ -66,6 +78,15 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 	}
 }
 
+// handleGetLoan reads one loan, decorated with its owner and mint tx hash.
+//
+//	@Summary	Get loan
+//	@Tags		loans
+//	@Produce	json
+//	@Param		id	path		int	true	"Loan ID"
+//	@Success	200	{object}	loanResponse
+//	@Failure	404	{object}	errorResponse
+//	@Router		/loans/{id} [get]
 func handleGetLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -86,6 +107,22 @@ func handleGetLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	}
 }
 
+type loansListResponse struct {
+	Loans []loanResponse `json:"loans"`
+}
+
+// handleListLoans lists loans with optional filters and offset paging.
+//
+//	@Summary	List loans
+//	@Tags		loans
+//	@Produce	json
+//	@Param		lender	query		string	false	"Filter by lender address (case-insensitive)"
+//	@Param		status	query		string	false	"Filter by loan status"	Enums(originating, active, settling, repaid, defaulted)
+//	@Param		limit	query		int		false	"Page size"				minimum(1)	maximum(100)	default(50)
+//	@Param		offset	query		int		false	"Result offset"			minimum(0)
+//	@Success	200		{object}	loansListResponse
+//	@Failure	400		{object}	errorResponse
+//	@Router		/loans [get]
 func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Zero means "not specified". The service applies its default.
@@ -124,10 +161,19 @@ func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc 
 		for _, item := range items {
 			responses = append(responses, loanResponseFromLoan(item))
 		}
-		c.JSON(http.StatusOK, map[string]any{"loans": responses})
+		c.JSON(http.StatusOK, loansListResponse{Loans: responses})
 	}
 }
 
+// handleLoanTerms serves the terms JSON targeted by the note's tokenURI.
+//
+//	@Summary	Loan terms for tokenURI
+//	@Tags		loans
+//	@Produce	json
+//	@Param		id	path		int	true	"Loan ID"
+//	@Success	200	{object}	termsResponse
+//	@Failure	404	{object}	errorResponse
+//	@Router		/loans/{id}/terms [get]
 func handleLoanTerms(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -158,6 +204,20 @@ type transferLoanRequest struct {
 	ToAddress string `json:"to_address"`
 }
 
+// handleTransferLoan reassigns the note to a new lender on chain.
+//
+//	@Summary	Transfer loan note
+//	@Tags		loans
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		int					true	"Loan ID"
+//	@Param		request	body		transferLoanRequest	true	"Transfer target"
+//	@Success	200		{object}	loanResponse
+//	@Failure	400		{object}	errorResponse
+//	@Failure	404		{object}	errorResponse
+//	@Failure	409		{object}	errorResponse	"Loan is not transferable"
+//	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Router		/loans/{id}/transfer [post]
 func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -185,6 +245,17 @@ func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFu
 	}
 }
 
+// handleDefaultLoan marks an active loan defaulted on chain and in the API.
+//
+//	@Summary	Mark loan defaulted
+//	@Tags		loans
+//	@Produce	json
+//	@Param		id	path		int	true	"Loan ID"
+//	@Success	200	{object}	loanResponse
+//	@Failure	404	{object}	errorResponse
+//	@Failure	409	{object}	errorResponse	"Loan is not active"
+//	@Failure	503	{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Router		/loans/{id}/default [post]
 func handleDefaultLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -211,6 +282,21 @@ type createRepaymentRequest struct {
 	ExternalRef string `json:"external_ref"`
 }
 
+// handleCreateRepayment records a repayment; paying the balance to zero
+// settles the loan and burns the note.
+//
+//	@Summary	Record repayment
+//	@Tags		loans
+//	@Accept		json
+//	@Produce	json
+//	@Param		id		path		int						true	"Loan ID"
+//	@Param		request	body		createRepaymentRequest	true	"Repayment to record"
+//	@Success	201		{object}	repaymentResultResponse
+//	@Failure	400		{object}	errorResponse	"Invalid amount or overpayment"
+//	@Failure	404		{object}	errorResponse
+//	@Failure	409		{object}	errorResponse	"Loan not active or duplicate external_ref"
+//	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Router		/loans/{id}/repayments [post]
 func handleCreateRepayment(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -246,6 +332,19 @@ func handleCreateRepayment(logger *slog.Logger, service LoansService) gin.Handle
 	}
 }
 
+type repaymentsListResponse struct {
+	Repayments []repaymentResponse `json:"repayments"`
+}
+
+// handleListRepayments lists a loan's repayments oldest-first.
+//
+//	@Summary	List repayments
+//	@Tags		loans
+//	@Produce	json
+//	@Param		id	path		int	true	"Loan ID"
+//	@Success	200	{object}	repaymentsListResponse
+//	@Failure	404	{object}	errorResponse
+//	@Router		/loans/{id}/repayments [get]
 func handleListRepayments(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
@@ -267,7 +366,7 @@ func handleListRepayments(logger *slog.Logger, service LoansService) gin.Handler
 		for _, item := range items {
 			repayments = append(repayments, repaymentResponseFromRepayment(item))
 		}
-		c.JSON(http.StatusOK, map[string]any{"repayments": repayments})
+		c.JSON(http.StatusOK, repaymentsListResponse{Repayments: repayments})
 	}
 }
 
