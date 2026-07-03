@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 
 	db "kaleido-project/db/sqlc"
@@ -22,47 +23,48 @@ type deployContractRequest struct {
 	BaseURI string `json:"base_uri"`
 }
 
-func handleDeployContract(logger *slog.Logger, contracts ContractsService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		req, err := decode[deployContractRequest](r)
+func handleDeployContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req deployContractRequest
+		err := c.ShouldBindJSON(&req)
 		// An empty body falls back to the configured base URI, so EOF error is ok.
 		if err != nil && !errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid json body"))
+			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
 
-		contract, err := contracts.Deploy(r.Context(), req.BaseURI)
+		contract, err := contracts.Deploy(c.Request.Context(), req.BaseURI)
 		if err != nil {
 			if errors.Is(err, contractspkg.ErrContractAlreadyDeployed) {
-				writeJSON(w, http.StatusConflict, errorBody(err.Error()))
+				c.JSON(http.StatusConflict, errorBody(err.Error()))
 				return
 			}
 			if errors.Is(err, db.ErrLockBusy) {
-				writeJSON(w, http.StatusServiceUnavailable, errorBody("another chain operation is in progress, retry shortly"))
+				c.JSON(http.StatusServiceUnavailable, errorBody("another chain operation is in progress, retry shortly"))
 				return
 			}
-			logger.ErrorContext(r.Context(), "deploy contract failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("deploy contract failed"))
+			logger.ErrorContext(c.Request.Context(), "deploy contract failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("deploy contract failed"))
 			return
 		}
-		writeJSON(w, http.StatusCreated, contractResponseFromStore(contract))
-	})
+		c.JSON(http.StatusCreated, contractResponseFromStore(contract))
+	}
 }
 
-func handleActiveContract(logger *slog.Logger, contracts ContractsService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		contract, err := contracts.ActiveContract(r.Context())
+func handleActiveContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		contract, err := contracts.ActiveContract(c.Request.Context())
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeJSON(w, http.StatusNotFound, errorBody("active contract not found"))
+			c.JSON(http.StatusNotFound, errorBody("active contract not found"))
 			return
 		}
 		if err != nil {
-			logger.ErrorContext(r.Context(), "get active contract failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("get active contract failed"))
+			logger.ErrorContext(c.Request.Context(), "get active contract failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("get active contract failed"))
 			return
 		}
-		writeJSON(w, http.StatusOK, contractResponseFromStore(contract))
-	})
+		c.JSON(http.StatusOK, contractResponseFromStore(contract))
+	}
 }
 
 type contractResponse struct {

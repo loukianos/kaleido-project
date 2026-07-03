@@ -2,13 +2,12 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -28,67 +27,57 @@ func New(version string, logger *slog.Logger, opts Options) http.Handler {
 		panic("api: Options.Loans and Options.Contracts are required")
 	}
 
-	mux := http.NewServeMux()
-	addRoutes(mux, version, logger, opts)
-
-	var handler http.Handler = mux
-	handler = requestLogger(logger, handler)
-	return handler
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.Use(requestLogger(logger), gin.Recovery())
+	addRoutes(router, version, logger, opts)
+	return router
 }
 
-func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func requestLogger(logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
-		next.ServeHTTP(rec, r)
+		c.Next()
 
-		logger.LogAttrs(r.Context(), slog.LevelInfo, "http request",
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Int("status", rec.status),
+		logger.LogAttrs(c.Request.Context(), slog.LevelInfo, "http request",
+			slog.String("method", c.Request.Method),
+			slog.String("path", c.Request.URL.Path),
+			slog.Int("status", c.Writer.Status()),
 			slog.Duration("duration", time.Since(start)),
-			slog.String("remote", r.RemoteAddr),
+			slog.String("remote", c.Request.RemoteAddr),
 		)
-	})
+	}
 }
 
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func handleIndex(version string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
+func handleIndex(version string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, map[string]string{
 			"service": "kaleido-project-api",
 			"version": version,
 		})
-	})
+	}
 }
 
-func handleHealthz() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
+func handleHealthz() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, map[string]string{
 			"status": "ok",
 		})
-	})
+	}
 }
 
-func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []ReadinessCheck, contracts ContractsService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []ReadinessCheck, contracts ContractsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+
 		checks := map[string]string{"api": "ok"}
 		ready := true
 		for _, check := range readinessChecks {
-			if err := check.Check(r.Context()); err != nil {
+			if err := check.Check(ctx); err != nil {
 				ready = false
 				checks[check.Name] = "error"
-				logger.WarnContext(r.Context(), "readiness check failed",
+				logger.WarnContext(ctx, "readiness check failed",
 					slog.String("check", check.Name),
 					slog.String("error", err.Error()),
 				)
@@ -109,31 +98,17 @@ func handleReady(logger *slog.Logger, startedAt time.Time, readinessChecks []Rea
 			"started_at": startedAt.Format(time.RFC3339),
 			"checks":     checks,
 		}
-		contract, err := contracts.ActiveContract(r.Context())
+		contract, err := contracts.ActiveContract(ctx)
 		if err == nil {
 			body["active_contract"] = contract.Address
 		} else if !errors.Is(err, pgx.ErrNoRows) {
-			logger.WarnContext(r.Context(), "active contract lookup failed",
+			logger.WarnContext(ctx, "active contract lookup failed",
 				slog.String("error", err.Error()),
 			)
 		}
 
-		writeJSON(w, statusCode, body)
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func decode[T any](r *http.Request) (T, error) {
-	var v T
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		return v, fmt.Errorf("decode json: %w", err)
+		c.JSON(statusCode, body)
 	}
-	return v, nil
 }
 
 func errorBody(msg string) map[string]string {

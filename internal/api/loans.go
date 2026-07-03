@@ -8,9 +8,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 
-	"kaleido-project/db/sqlc"
+	db "kaleido-project/db/sqlc"
 	"kaleido-project/internal/loans"
 )
 
@@ -33,19 +34,19 @@ type createLoanRequest struct {
 	TermDays       int64  `json:"term_days"`
 }
 
-func handleCreateLoan(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		req, err := decode[createLoanRequest](r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid json body"))
+func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req createLoanRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
 		if req.BorrowerRef == "" || req.LenderAddress == "" {
-			writeJSON(w, http.StatusBadRequest, errorBody("borrower_ref and lender_address are required"))
+			c.JSON(http.StatusBadRequest, errorBody("borrower_ref and lender_address are required"))
 			return
 		}
 
-		result, err := service.Originate(r.Context(), loans.OriginateRequest{
+		result, err := service.Originate(c.Request.Context(), loans.OriginateRequest{
 			BorrowerRef:    req.BorrowerRef,
 			LenderAddress:  req.LenderAddress,
 			PrincipalMinor: req.PrincipalMinor,
@@ -53,69 +54,69 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) http.Handler {
 			TermDays:       req.TermDays,
 		})
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "create loan failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("create loan failed"))
+			logger.ErrorContext(c.Request.Context(), "create loan failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("create loan failed"))
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
-	})
+		c.JSON(http.StatusCreated, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
+	}
 }
 
-func handleGetLoan(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleGetLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		result, err := service.Get(r.Context(), id)
+		result, err := service.Get(c.Request.Context(), id)
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "get loan failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("get loan failed"))
+			logger.ErrorContext(c.Request.Context(), "get loan failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("get loan failed"))
 			return
 		}
-		writeJSON(w, http.StatusOK, loanResponseFromRead(result))
-	})
+		c.JSON(http.StatusOK, loanResponseFromRead(result))
+	}
 }
 
-func handleListLoans(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Zero means "not specified"; the service applies its default.
+func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Zero means "not specified". The service applies its default.
 		limit := int32(0)
-		if raw := r.URL.Query().Get("limit"); raw != "" {
+		if raw := c.Query("limit"); raw != "" {
 			parsed, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || parsed < 1 || parsed > 100 {
-				writeJSON(w, http.StatusBadRequest, errorBody("limit must be between 1 and 100"))
+				c.JSON(http.StatusBadRequest, errorBody("limit must be between 1 and 100"))
 				return
 			}
 			limit = int32(parsed)
 		}
 		offset := int32(0)
-		if raw := r.URL.Query().Get("offset"); raw != "" {
+		if raw := c.Query("offset"); raw != "" {
 			parsed, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || parsed < 0 {
-				writeJSON(w, http.StatusBadRequest, errorBody("offset must be non-negative"))
+				c.JSON(http.StatusBadRequest, errorBody("offset must be non-negative"))
 				return
 			}
 			offset = int32(parsed)
 		}
 
-		items, err := service.List(r.Context(), loans.ListRequest{
-			Lender: r.URL.Query().Get("lender"),
-			Status: r.URL.Query().Get("status"),
+		items, err := service.List(c.Request.Context(), loans.ListRequest{
+			Lender: c.Query("lender"),
+			Status: c.Query("status"),
 			Limit:  limit,
 			Offset: offset,
 		})
 		if err != nil {
-			logger.ErrorContext(r.Context(), "list loans failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("list loans failed"))
+			logger.ErrorContext(c.Request.Context(), "list loans failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("list loans failed"))
 			return
 		}
 
@@ -123,86 +124,86 @@ func handleListLoans(logger *slog.Logger, service LoansService) http.Handler {
 		for _, item := range items {
 			responses = append(responses, loanResponseFromLoan(item))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"loans": responses})
-	})
+		c.JSON(http.StatusOK, map[string]any{"loans": responses})
+	}
 }
 
-func handleLoanTerms(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleLoanTerms(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		terms, err := service.Terms(r.Context(), id)
+		terms, err := service.Terms(c.Request.Context(), id)
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "get loan terms failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("get loan terms failed"))
+			logger.ErrorContext(c.Request.Context(), "get loan terms failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("get loan terms failed"))
 			return
 		}
-		writeJSON(w, http.StatusOK, termsResponse{
+		c.JSON(http.StatusOK, termsResponse{
 			PrincipalMinor:   terms.PrincipalMinor,
 			APRBps:           terms.APRBps,
 			TermDays:         terms.TermDays,
 			InterestDueMinor: terms.InterestDueMinor,
 			TotalDueMinor:    terms.TotalDueMinor,
 		})
-	})
+	}
 }
 
 type transferLoanRequest struct {
 	ToAddress string `json:"to_address"`
 }
 
-func handleTransferLoan(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		req, err := decode[transferLoanRequest](r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid json body"))
+		var req transferLoanRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
 
-		result, err := service.Transfer(r.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress})
+		result, err := service.Transfer(c.Request.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress})
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "transfer loan failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("transfer loan failed"))
+			logger.ErrorContext(c.Request.Context(), "transfer loan failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("transfer loan failed"))
 			return
 		}
 
-		writeJSON(w, http.StatusOK, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
-	})
+		c.JSON(http.StatusOK, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
+	}
 }
 
-func handleDefaultLoan(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleDefaultLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		result, err := service.Default(r.Context(), id)
+		result, err := service.Default(c.Request.Context(), id)
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "default loan failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("default loan failed"))
+			logger.ErrorContext(c.Request.Context(), "default loan failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("default loan failed"))
 			return
 		}
 
-		writeJSON(w, http.StatusOK, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
-	})
+		c.JSON(http.StatusOK, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
+	}
 }
 
 type createRepaymentRequest struct {
@@ -210,55 +211,55 @@ type createRepaymentRequest struct {
 	ExternalRef string `json:"external_ref"`
 }
 
-func handleCreateRepayment(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleCreateRepayment(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		req, err := decode[createRepaymentRequest](r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, errorBody("invalid json body"))
+		var req createRepaymentRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
 
-		result, err := service.RecordRepayment(r.Context(), id, loans.RepaymentRequest{
+		result, err := service.RecordRepayment(c.Request.Context(), id, loans.RepaymentRequest{
 			AmountMinor: req.AmountMinor,
 			ExternalRef: req.ExternalRef,
 		})
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "create repayment failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("create repayment failed"))
+			logger.ErrorContext(c.Request.Context(), "create repayment failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("create repayment failed"))
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, repaymentResultResponse{
+		c.JSON(http.StatusCreated, repaymentResultResponse{
 			Repayment:             repaymentResponseFromRepayment(result.Repayment),
 			Loan:                  loanResponseFromLoan(result.Loan),
 			SettlementOperationID: result.SettlementOperationID,
 			SettlementTxHash:      result.SettlementTxHash,
 		})
-	})
+	}
 }
 
-func handleListRepayments(logger *slog.Logger, service LoansService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathID(w, r)
+func handleListRepayments(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, ok := pathID(c)
 		if !ok {
 			return
 		}
 
-		items, err := service.ListRepayments(r.Context(), id)
+		items, err := service.ListRepayments(c.Request.Context(), id)
 		if err != nil {
-			if writeLoanError(w, err) {
+			if writeLoanError(c, err) {
 				return
 			}
-			logger.ErrorContext(r.Context(), "list repayments failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorBody("list repayments failed"))
+			logger.ErrorContext(c.Request.Context(), "list repayments failed", "error", err)
+			c.JSON(http.StatusInternalServerError, errorBody("list repayments failed"))
 			return
 		}
 
@@ -266,8 +267,8 @@ func handleListRepayments(logger *slog.Logger, service LoansService) http.Handle
 		for _, item := range items {
 			repayments = append(repayments, repaymentResponseFromRepayment(item))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"repayments": repayments})
-	})
+		c.JSON(http.StatusOK, map[string]any{"repayments": repayments})
+	}
 }
 
 type loanResponse struct {
@@ -360,33 +361,33 @@ type termsResponse struct {
 	TotalDueMinor    int64  `json:"total_due_minor"`
 }
 
-func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+func pathID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id < 1 {
-		writeJSON(w, http.StatusBadRequest, errorBody("invalid id"))
+		c.JSON(http.StatusBadRequest, errorBody("invalid id"))
 		return 0, false
 	}
 	return id, true
 }
 
-func writeLoanError(w http.ResponseWriter, err error) bool {
+func writeLoanError(c *gin.Context, err error) bool {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		writeJSON(w, http.StatusNotFound, errorBody("loan not found"))
+		c.JSON(http.StatusNotFound, errorBody("loan not found"))
 	case errors.Is(err, loans.ErrInvalidAmount),
 		errors.Is(err, loans.ErrInvalidTerm),
 		errors.Is(err, loans.ErrInvalidAddress),
 		errors.Is(err, loans.ErrOverpayment):
-		writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
+		c.JSON(http.StatusBadRequest, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrLoanNotActive),
 		errors.Is(err, loans.ErrLoanNotTransferable),
 		errors.Is(err, loans.ErrLoanMissingToken),
 		errors.Is(err, loans.ErrLoanMissingContract),
 		errors.Is(err, loans.ErrNoActiveContract),
 		errors.Is(err, loans.ErrDuplicateExternalRef):
-		writeJSON(w, http.StatusConflict, errorBody(err.Error()))
+		c.JSON(http.StatusConflict, errorBody(err.Error()))
 	case errors.Is(err, db.ErrLockBusy):
-		writeJSON(w, http.StatusServiceUnavailable, errorBody("another chain operation is in progress, retry shortly"))
+		c.JSON(http.StatusServiceUnavailable, errorBody("another chain operation is in progress, retry shortly"))
 	default:
 		return false
 	}
