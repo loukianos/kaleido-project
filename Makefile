@@ -1,3 +1,7 @@
+.PHONY: hooks
+hooks:
+	pre-commit install
+
 .PHONY: migrate
 migrate:
 	go run ./cmd/migrate

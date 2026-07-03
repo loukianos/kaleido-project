@@ -1,0 +1,25 @@
+# Keeps committed generated code (sqlc, swagger docs, contract bindings) in sync with its sources.
+# One-time setup: `make hooks` (runs `pre-commit install`).
+# When a hook regenerates files, the commit aborts so the changes can be reviewed.
+# Stage them and commit again.
+repos:
+  - repo: local
+    hooks:
+      - id: sqlc
+        name: sqlc generate
+        entry: make sqlc
+        language: system
+        files: ^(db/query/|db/migration/|sqlc\.yaml)
+        pass_filenames: false
+      - id: swagger
+        name: swagger docs
+        entry: make swagger
+        language: system
+        files: ^internal/api/.*\.go$
+        pass_filenames: false
+      - id: contract-bindings
+        name: contract bindings
+        entry: bash -c 'test -d contracts/node_modules; make bindings'
+        language: system
+        files: ^contracts/(src/|hardhat\.config|package\.json)
+        pass_filenames: false

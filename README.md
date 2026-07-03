@@ -13,8 +13,11 @@ Each token represents a lender's claim to repayment.
 - Node.js 22+ (for the Hardhat smart-contract project)
 - jq (for extracting ABI/bytecode when regenerating Go bindings)
 - Kind, kubectl, and Helm v3 for the Besu network
+- [pre-commit](https://pre-commit.com/) for the code-generation git hooks
 
 ## Quick start
+
+To run the demo:
 
 ```bash
 make paladin-up # start the local Besu network
@@ -24,9 +27,17 @@ make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
 
+For development, a few other onetime setup commands are required
+
+```bash
+make hooks # onetime pre-commit install
+make contracts-install # npm install for contract development
+```
+
 The API initializes an Ethereum client at startup, verifies `CHAIN_ID`, and logs the signer address derived from `DEPLOYER_PRIVATE_KEY`.
 
-Generated code is committed, so you don't need to regenerate sqlc or contract bindings.
+Generated code is regenerated via the pre-commit hooks.
+By convention, we commit all generated code, so that `git clone`rs don't need to re-run generation.
 
 ## Smart contract
 
@@ -43,8 +54,6 @@ Go bindings for `LoanNote` are generated from the compiled Hardhat artifact usin
 ```bash
 make bindings
 ```
-
-Bindings are committed, so they only need to be rebuilt by contributors who change the contract.
 
 ## Configuration
 
@@ -83,7 +92,7 @@ Database access code is generated from SQL files in `db/query` using sqlc.
 make sqlc
 ```
 
-In a real project we might handle this with a pre-commit hook that watches the directory that `sqlc.yaml` watches.
+The pre-commit hook reruns this automatically when staged changes touch `db/query/`, `db/migration/`, or `sqlc.yaml` (see [Git hooks](#git-hooks)).
 
 ## Swagger
 
@@ -95,8 +104,19 @@ Static copies of the spec are generated and committed at `docs/swagger.json` and
 make swagger # regenerate staitc swagger pages
 ```
 
-Like sqlc and the contract bindings, the generated `docs/` output is committed; regenerate it when handler annotations change.
+The pre-commit hook regenerates the swagger artifacts when staged changes touch `internal/api`.
 
+## Git hooks
+
+Generated code (sqlc, contract bindings, swagger docs) is kept in sync by [pre-commit](https://pre-commit.com/) hooks (`.pre-commit-config.yaml`).
+
+```bash
+make hooks # one-time setup, runs pre-commit install
+```
+
+When a hook regenerates files, the commit aborts so the changes can be reviewed.
+Stage them and commit again.
+Bypass the hooks with `git commit --no-verify`.
 
 ## Testing
 
