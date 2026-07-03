@@ -1,7 +1,3 @@
-// Command demo drives the API through the full loan lifecycle: deploy a
-// contract, then originate, transfer, and repay a loan to settlement, plus a
-// second loan that is marked defaulted. It expects the local stack (API,
-// Postgres, Besu) to be running; see the README.
 package main
 
 import (
@@ -34,8 +30,7 @@ func run() error {
 		return err
 	}
 
-	// Deploy is skipped when a contract already exists (e.g. on demo re-runs):
-	// the base version supports a single contract per chain.
+	// Deploy is skipped when a contract already exists (e.g. on demo re-runs)
 	if err := api.get("/contracts/active", nil); err != nil {
 		fmt.Println("Deploying active LoanNote contract")
 		if err := api.post("/admin/contracts/deploy", map[string]any{}, nil); err != nil {
