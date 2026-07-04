@@ -7,6 +7,7 @@ COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY db ./db
+COPY docs ./docs
 
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
