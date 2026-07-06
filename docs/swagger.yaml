@@ -31,6 +31,10 @@ definitions:
         description: ContractID selects the loan series to originate into; omit it
           to use the chain's active contract.
         type: integer
+      external_ref:
+        description: 'ExternalRef is the client''s idempotency key: a retried request
+          with the same ref returns the existing loan instead of creating a sibling.'
+        type: string
       lender_address:
         description: Exactly one of lender_address (external wallet) and lender_subject
           (custodial identity) is required.
@@ -78,6 +82,8 @@ definitions:
         type: string
       contract_id:
         type: integer
+      external_ref:
+        type: string
       id:
         type: integer
       interest_due_minor:
@@ -85,6 +91,10 @@ definitions:
       lender_address:
         type: string
       lender_subject:
+        type: string
+      message:
+        description: 'Message accompanies 202 responses: the operation is journaled
+          and the platform will retry it.'
         type: string
       mint_signer_address:
         type: string
@@ -125,6 +135,27 @@ definitions:
         example: 080dfd67-ccc1-49c1-8a30-c292b3a4a7cf
         type: string
     type: object
+  api.operationResponse:
+    properties:
+      attempts:
+        type: integer
+      contract_id:
+        type: integer
+      error:
+        type: string
+      id:
+        type: integer
+      kind:
+        type: string
+      loan_id:
+        type: integer
+      signer_address:
+        type: string
+      status:
+        type: string
+      tx_hash:
+        type: string
+    type: object
   api.readinessResponse:
     properties:
       active_contract:
@@ -157,6 +188,8 @@ definitions:
     properties:
       loan:
         $ref: '#/definitions/api.loanResponse'
+      message:
+        type: string
       repayment:
         $ref: '#/definitions/api.repaymentResponse'
       settlement_operation_id:
@@ -653,6 +686,33 @@ paths:
       summary: Transfer loan note
       tags:
       - loans
+  /operations/{id}:
+    get:
+      description: 'Operational view of a chain write: status, attempts, last error,
+        and transaction hash. Lenders poll their loan instead; this endpoint is for
+        the servicer.'
+      parameters:
+      - description: Operation ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.operationResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get chain operation
+      tags:
+      - operations
   /ready:
     get:
       produces:

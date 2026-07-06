@@ -111,3 +111,7 @@ func (r *Repository) SetOperationMined(ctx context.Context, id int64) (db.ChainO
 func (r *Repository) SetOperationRetryable(ctx context.Context, params db.SetOperationRetryableParams) (db.ChainOperation, error) {
 	return r.queries.SetOperationRetryable(ctx, params)
 }
+
+func (r *Repository) SetOperationFailed(ctx context.Context, params db.SetOperationFailedParams) (db.ChainOperation, error) {
+	return r.queries.SetOperationFailed(ctx, params)
+}

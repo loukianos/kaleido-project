@@ -45,9 +45,42 @@ RETURNING *;
 UPDATE chain_operations
 SET status = 'retryable',
     error = $2,
+    attempts = attempts + 1,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: SetOperationFailed :one
+UPDATE chain_operations
+SET status = 'failed',
+    error = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListRetryableOperations :many
+SELECT *
+FROM chain_operations
+WHERE status = 'retryable'
+  AND attempts < @max_attempts::integer
+ORDER BY updated_at
+LIMIT @limit_count;
+
+-- name: ListExhaustedOperations :many
+SELECT *
+FROM chain_operations
+WHERE status = 'retryable'
+  AND attempts >= @max_attempts::integer
+ORDER BY updated_at
+LIMIT @limit_count;
+
+-- name: ListStaleSubmittedOperations :many
+SELECT *
+FROM chain_operations
+WHERE status = 'submitted'
+  AND updated_at < @stale_before::timestamptz
+ORDER BY updated_at
+LIMIT @limit_count;
 
 -- name: AttachOperationContract :one
 UPDATE chain_operations

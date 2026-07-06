@@ -28,6 +28,7 @@ type ChainOperation struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	SignerAddress *string
+	Attempts      int32
 }
 
 type Contract struct {
@@ -66,6 +67,7 @@ type Loan struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	LenderIdentityID *int64
+	ExternalRef      *string
 }
 
 type Repayment struct {

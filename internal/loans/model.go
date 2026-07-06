@@ -19,6 +19,7 @@ const (
 	LoanStatusSettling    = "settling"
 	LoanStatusRepaid      = "repaid"
 	LoanStatusDefaulted   = "defaulted"
+	LoanStatusFailed      = "failed"
 )
 
 type LoanTerms struct {

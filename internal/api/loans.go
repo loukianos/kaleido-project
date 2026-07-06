@@ -27,6 +27,7 @@ type LoansService interface {
 	ListRepayments(context.Context, int64) ([]db.Repayment, error)
 	Transfer(context.Context, int64, loans.TransferRequest, loans.Caller) (loans.TransferResult, error)
 	Default(context.Context, int64) (loans.DefaultResult, error)
+	Operation(context.Context, int64) (db.ChainOperation, error)
 }
 
 type createLoanRequest struct {
@@ -39,6 +40,8 @@ type createLoanRequest struct {
 	TermDays       int64  `json:"term_days"`
 	// ContractID selects the loan series to originate into; omit it to use the chain's active contract.
 	ContractID *int64 `json:"contract_id,omitempty"`
+	// ExternalRef is the client's idempotency key: a retried request with the same ref returns the existing loan instead of creating a sibling.
+	ExternalRef string `json:"external_ref,omitempty"`
 }
 
 // handleCreateLoan originates a loan and mints its note on chain.
@@ -74,8 +77,13 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 			APRBps:         req.APRBps,
 			TermDays:       req.TermDays,
 			ContractID:     req.ContractID,
+			ExternalRef:    req.ExternalRef,
 		})
 		if err != nil {
+			if errors.Is(err, loans.ErrOperationPending) {
+				writePendingLoan(c, result.Loan, result.OperationID, err)
+				return
+			}
 			if writeLoanError(c, err) {
 				return
 			}
@@ -86,8 +94,20 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 
 		response := loanResponseWithTx(result.Loan, result.OperationID, result.TxHash)
 		response.LenderSubject = result.LenderSubject
+		// An idempotent replay returns the existing loan rather than reporting a new creation.
+		if result.Existing {
+			c.JSON(http.StatusOK, response)
+			return
+		}
 		c.JSON(http.StatusCreated, response)
 	}
+}
+
+// writePendingLoan reports a journaled chain write the platform will retry: 202 with the resource to poll.
+func writePendingLoan(c *gin.Context, loan db.Loan, operationID int64, err error) {
+	response := loanResponseWithTx(loan, operationID, "")
+	response.Message = err.Error()
+	c.JSON(http.StatusAccepted, response)
 }
 
 // handleGetLoan reads one loan, decorated with its owner and mint tx hash.
@@ -309,6 +329,10 @@ func handleDefaultLoan(logger *slog.Logger, service LoansService) gin.HandlerFun
 
 		result, err := service.Default(c.Request.Context(), id)
 		if err != nil {
+			if errors.Is(err, loans.ErrOperationPending) {
+				writePendingLoan(c, result.Loan, result.OperationID, err)
+				return
+			}
 			if writeLoanError(c, err) {
 				return
 			}
@@ -360,6 +384,16 @@ func handleCreateRepayment(logger *slog.Logger, service LoansService) gin.Handle
 			ExternalRef: req.ExternalRef,
 		})
 		if err != nil {
+			if errors.Is(err, loans.ErrOperationPending) {
+				// The repayment is recorded; only the on-chain settlement is still in flight.
+				c.JSON(http.StatusAccepted, repaymentResultResponse{
+					Repayment:             repaymentResponseFromRepayment(result.Repayment),
+					Loan:                  loanResponseFromLoan(result.Loan),
+					SettlementOperationID: result.SettlementOperationID,
+					Message:               err.Error(),
+				})
+				return
+			}
 			if writeLoanError(c, err) {
 				return
 			}
@@ -437,6 +471,9 @@ type loanResponse struct {
 	TxHash            string `json:"tx_hash,omitempty"`
 	OwnerAddress      string `json:"owner_address,omitempty"`
 	MintSignerAddress string `json:"mint_signer_address,omitempty"`
+	ExternalRef       string `json:"external_ref,omitempty"`
+	// Message accompanies 202 responses: the operation is journaled and the platform will retry it.
+	Message string `json:"message,omitempty"`
 }
 
 type repaymentResultResponse struct {
@@ -444,6 +481,7 @@ type repaymentResultResponse struct {
 	Loan                  loanResponse      `json:"loan"`
 	SettlementOperationID int64             `json:"settlement_operation_id,omitempty"`
 	SettlementTxHash      string            `json:"settlement_tx_hash,omitempty"`
+	Message               string            `json:"message,omitempty"`
 }
 
 type repaymentResponse struct {
@@ -522,6 +560,7 @@ func loanResponseFromLoan(loan db.Loan) loanResponse {
 		TotalDueMinor:    loan.TotalDueMinor,
 		OutstandingMinor: loan.OutstandingMinor,
 		Status:           loan.Status,
+		ExternalRef:      stringFromNull(loan.ExternalRef),
 	}
 }
 

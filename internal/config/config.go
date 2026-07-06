@@ -16,17 +16,18 @@ import (
 const devKeyEncryptionMasterKey = "6a006ea1d0bfd421d93890dfe78ec0fb16e74a9818e5a097a5d5cc0f62693051"
 
 type Config struct {
-	Port                   string
-	EthRPCURL              string
-	ChainID                int64
-	DatabaseURL            string
-	LoanBaseURI            string
-	DeployerPrivateKey     string
-	KeyEncryptionMasterKey string
-	OIDCIssuerURL          string
-	OIDCJWKSURL            string
-	OIDCAudience           string
-	ServicerKeyPoolSize    int
+	Port                     string
+	EthRPCURL                string
+	ChainID                  int64
+	DatabaseURL              string
+	LoanBaseURI              string
+	DeployerPrivateKey       string
+	KeyEncryptionMasterKey   string
+	OIDCIssuerURL            string
+	OIDCJWKSURL              string
+	OIDCAudience             string
+	ServicerKeyPoolSize      int
+	ReconcileIntervalSeconds int
 }
 
 func Load() (Config, error) {
@@ -54,6 +55,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SERVICER_KEY_POOL_SIZE must be an integer between 0 and 32, got %q", getenv("SERVICER_KEY_POOL_SIZE", "2"))
 	}
 	cfg.ServicerKeyPoolSize = poolSize
+
+	reconcileInterval, err := strconv.Atoi(getenv("RECONCILE_INTERVAL_SECONDS", "5"))
+	if err != nil || reconcileInterval < 1 || reconcileInterval > 3600 {
+		return Config{}, fmt.Errorf("RECONCILE_INTERVAL_SECONDS must be an integer between 1 and 3600, got %q", getenv("RECONCILE_INTERVAL_SECONDS", "5"))
+	}
+	cfg.ReconcileIntervalSeconds = reconcileInterval
 
 	if err := cfg.validate(); err != nil {
 		return Config{}, err

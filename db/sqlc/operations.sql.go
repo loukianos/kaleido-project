@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 const attachOperationContract = `-- name: AttachOperationContract :one
@@ -14,7 +15,7 @@ UPDATE chain_operations
 SET contract_id = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 type AttachOperationContractParams struct {
@@ -37,6 +38,7 @@ func (q *Queries) AttachOperationContract(ctx context.Context, arg AttachOperati
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }
@@ -50,7 +52,7 @@ INSERT INTO chain_operations (
 ) VALUES (
     $1, $2, $3, $4
 )
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 type CreateChainOperationParams struct {
@@ -80,12 +82,13 @@ func (q *Queries) CreateChainOperation(ctx context.Context, arg CreateChainOpera
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }
 
 const getChainOperationByID = `-- name: GetChainOperationByID :one
-SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 FROM chain_operations
 WHERE id = $1
 `
@@ -105,8 +108,150 @@ func (q *Queries) GetChainOperationByID(ctx context.Context, id int64) (ChainOpe
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
+}
+
+const listExhaustedOperations = `-- name: ListExhaustedOperations :many
+SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
+FROM chain_operations
+WHERE status = 'retryable'
+  AND attempts >= $1::integer
+ORDER BY updated_at
+LIMIT $2
+`
+
+type ListExhaustedOperationsParams struct {
+	MaxAttempts int32
+	LimitCount  int32
+}
+
+func (q *Queries) ListExhaustedOperations(ctx context.Context, arg ListExhaustedOperationsParams) ([]ChainOperation, error) {
+	rows, err := q.db.Query(ctx, listExhaustedOperations, arg.MaxAttempts, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChainOperation
+	for rows.Next() {
+		var i ChainOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Status,
+			&i.ContractID,
+			&i.LoanID,
+			&i.TxHash,
+			&i.Nonce,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SignerAddress,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRetryableOperations = `-- name: ListRetryableOperations :many
+SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
+FROM chain_operations
+WHERE status = 'retryable'
+  AND attempts < $1::integer
+ORDER BY updated_at
+LIMIT $2
+`
+
+type ListRetryableOperationsParams struct {
+	MaxAttempts int32
+	LimitCount  int32
+}
+
+func (q *Queries) ListRetryableOperations(ctx context.Context, arg ListRetryableOperationsParams) ([]ChainOperation, error) {
+	rows, err := q.db.Query(ctx, listRetryableOperations, arg.MaxAttempts, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChainOperation
+	for rows.Next() {
+		var i ChainOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Status,
+			&i.ContractID,
+			&i.LoanID,
+			&i.TxHash,
+			&i.Nonce,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SignerAddress,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleSubmittedOperations = `-- name: ListStaleSubmittedOperations :many
+SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
+FROM chain_operations
+WHERE status = 'submitted'
+  AND updated_at < $1::timestamptz
+ORDER BY updated_at
+LIMIT $2
+`
+
+type ListStaleSubmittedOperationsParams struct {
+	StaleBefore time.Time
+	LimitCount  int32
+}
+
+func (q *Queries) ListStaleSubmittedOperations(ctx context.Context, arg ListStaleSubmittedOperationsParams) ([]ChainOperation, error) {
+	rows, err := q.db.Query(ctx, listStaleSubmittedOperations, arg.StaleBefore, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChainOperation
+	for rows.Next() {
+		var i ChainOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Status,
+			&i.ContractID,
+			&i.LoanID,
+			&i.TxHash,
+			&i.Nonce,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SignerAddress,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setOperationApplied = `-- name: SetOperationApplied :one
@@ -115,7 +260,7 @@ SET status = 'applied',
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 func (q *Queries) SetOperationApplied(ctx context.Context, id int64) (ChainOperation, error) {
@@ -133,6 +278,41 @@ func (q *Queries) SetOperationApplied(ctx context.Context, id int64) (ChainOpera
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
+	)
+	return i, err
+}
+
+const setOperationFailed = `-- name: SetOperationFailed :one
+UPDATE chain_operations
+SET status = 'failed',
+    error = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
+`
+
+type SetOperationFailedParams struct {
+	ID    int64
+	Error *string
+}
+
+func (q *Queries) SetOperationFailed(ctx context.Context, arg SetOperationFailedParams) (ChainOperation, error) {
+	row := q.db.QueryRow(ctx, setOperationFailed, arg.ID, arg.Error)
+	var i ChainOperation
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Status,
+		&i.ContractID,
+		&i.LoanID,
+		&i.TxHash,
+		&i.Nonce,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }
@@ -143,7 +323,7 @@ SET status = 'mined',
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 func (q *Queries) SetOperationMined(ctx context.Context, id int64) (ChainOperation, error) {
@@ -161,6 +341,7 @@ func (q *Queries) SetOperationMined(ctx context.Context, id int64) (ChainOperati
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }
@@ -169,9 +350,10 @@ const setOperationRetryable = `-- name: SetOperationRetryable :one
 UPDATE chain_operations
 SET status = 'retryable',
     error = $2,
+    attempts = attempts + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 type SetOperationRetryableParams struct {
@@ -194,6 +376,7 @@ func (q *Queries) SetOperationRetryable(ctx context.Context, arg SetOperationRet
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }
@@ -207,7 +390,7 @@ SET status = 'submitted',
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address, attempts
 `
 
 type SetOperationSubmittedParams struct {
@@ -237,6 +420,7 @@ func (q *Queries) SetOperationSubmitted(ctx context.Context, arg SetOperationSub
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SignerAddress,
+		&i.Attempts,
 	)
 	return i, err
 }

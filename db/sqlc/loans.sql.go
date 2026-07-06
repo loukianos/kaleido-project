@@ -22,11 +22,12 @@ INSERT INTO loans (
     outstanding_minor,
     status,
     mint_operation_id,
-    contract_id
+    contract_id,
+    external_ref
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 )
-RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 `
 
 type CreateLoanParams struct {
@@ -42,6 +43,7 @@ type CreateLoanParams struct {
 	Status           string
 	MintOperationID  *int64
 	ContractID       *int64
+	ExternalRef      *string
 }
 
 func (q *Queries) CreateLoan(ctx context.Context, arg CreateLoanParams) (Loan, error) {
@@ -58,6 +60,7 @@ func (q *Queries) CreateLoan(ctx context.Context, arg CreateLoanParams) (Loan, e
 		arg.Status,
 		arg.MintOperationID,
 		arg.ContractID,
+		arg.ExternalRef,
 	)
 	var i Loan
 	err := row.Scan(
@@ -77,12 +80,44 @@ func (q *Queries) CreateLoan(ctx context.Context, arg CreateLoanParams) (Loan, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
+	)
+	return i, err
+}
+
+const getLoanByExternalRef = `-- name: GetLoanByExternalRef :one
+SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
+FROM loans
+WHERE external_ref = $1
+`
+
+func (q *Queries) GetLoanByExternalRef(ctx context.Context, externalRef *string) (Loan, error) {
+	row := q.db.QueryRow(ctx, getLoanByExternalRef, externalRef)
+	var i Loan
+	err := row.Scan(
+		&i.ID,
+		&i.TokenID,
+		&i.ContractID,
+		&i.BorrowerRef,
+		&i.LenderAddress,
+		&i.PrincipalMinor,
+		&i.AprBps,
+		&i.TermDays,
+		&i.InterestDueMinor,
+		&i.TotalDueMinor,
+		&i.OutstandingMinor,
+		&i.Status,
+		&i.MintOperationID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
 
 const getLoanByID = `-- name: GetLoanByID :one
-SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 FROM loans
 WHERE id = $1
 `
@@ -107,12 +142,13 @@ func (q *Queries) GetLoanByID(ctx context.Context, id int64) (Loan, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
 
 const getLoanByIDForUpdate = `-- name: GetLoanByIDForUpdate :one
-SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 FROM loans
 WHERE id = $1
 FOR UPDATE
@@ -138,12 +174,13 @@ func (q *Queries) GetLoanByIDForUpdate(ctx context.Context, id int64) (Loan, err
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
 
 const listLoans = `-- name: ListLoans :many
-SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 FROM loans
 WHERE ($1::text = '' OR lower(lender_address) = lower($1::text))
   AND ($2::bigint = 0 OR lender_identity_id = $2::bigint)
@@ -193,6 +230,7 @@ func (q *Queries) ListLoans(ctx context.Context, arg ListLoansParams) ([]Loan, e
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LenderIdentityID,
+			&i.ExternalRef,
 		); err != nil {
 			return nil, err
 		}
@@ -212,7 +250,7 @@ SET token_id = $2,
     contract_id = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 `
 
 type SetLoanActiveParams struct {
@@ -247,6 +285,7 @@ func (q *Queries) SetLoanActive(ctx context.Context, arg SetLoanActiveParams) (L
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
@@ -256,7 +295,7 @@ UPDATE loans
 SET status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 `
 
 type SetLoanStatusParams struct {
@@ -284,6 +323,7 @@ func (q *Queries) SetLoanStatus(ctx context.Context, arg SetLoanStatusParams) (L
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
@@ -294,7 +334,7 @@ SET lender_address = $2,
     lender_identity_id = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 `
 
 type UpdateLoanLenderParams struct {
@@ -323,6 +363,7 @@ func (q *Queries) UpdateLoanLender(ctx context.Context, arg UpdateLoanLenderPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }
@@ -333,7 +374,7 @@ SET outstanding_minor = $2,
     status = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
+RETURNING id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id, external_ref
 `
 
 type UpdateLoanOutstandingAndStatusParams struct {
@@ -362,6 +403,7 @@ func (q *Queries) UpdateLoanOutstandingAndStatus(ctx context.Context, arg Update
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LenderIdentityID,
+		&i.ExternalRef,
 	)
 	return i, err
 }

@@ -710,6 +710,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/operations/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Operational view of a chain write: status, attempts, last error, and transaction hash. Lenders poll their loan instead; this endpoint is for the servicer.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "operations"
+                ],
+                "summary": "Get chain operation",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Operation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.operationResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/ready": {
             "get": {
                 "produces": [
@@ -784,6 +824,10 @@ const docTemplate = `{
                     "description": "ContractID selects the loan series to originate into; omit it to use the chain's active contract.",
                     "type": "integer"
                 },
+                "external_ref": {
+                    "description": "ExternalRef is the client's idempotency key: a retried request with the same ref returns the existing loan instead of creating a sibling.",
+                    "type": "string"
+                },
                 "lender_address": {
                     "description": "Exactly one of lender_address (external wallet) and lender_subject (custodial identity) is required.",
                     "type": "string"
@@ -851,6 +895,9 @@ const docTemplate = `{
                 "contract_id": {
                     "type": "integer"
                 },
+                "external_ref": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -861,6 +908,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "lender_subject": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message accompanies 202 responses: the operation is journaled and the platform will retry it.",
                     "type": "string"
                 },
                 "mint_signer_address": {
@@ -922,6 +973,38 @@ const docTemplate = `{
                 }
             }
         },
+        "api.operationResponse": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "contract_id": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "loan_id": {
+                    "type": "integer"
+                },
+                "signer_address": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tx_hash": {
+                    "type": "string"
+                }
+            }
+        },
         "api.readinessResponse": {
             "type": "object",
             "properties": {
@@ -969,6 +1052,9 @@ const docTemplate = `{
             "properties": {
                 "loan": {
                     "$ref": "#/definitions/api.loanResponse"
+                },
+                "message": {
+                    "type": "string"
                 },
                 "repayment": {
                     "$ref": "#/definitions/api.repaymentResponse"
