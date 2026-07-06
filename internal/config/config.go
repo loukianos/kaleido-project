@@ -26,6 +26,7 @@ type Config struct {
 	OIDCIssuerURL          string
 	OIDCJWKSURL            string
 	OIDCAudience           string
+	ServicerKeyPoolSize    int
 }
 
 func Load() (Config, error) {
@@ -47,6 +48,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.ChainID = chainID
+
+	poolSize, err := strconv.Atoi(getenv("SERVICER_KEY_POOL_SIZE", "2"))
+	if err != nil || poolSize < 0 || poolSize > 32 {
+		return Config{}, fmt.Errorf("SERVICER_KEY_POOL_SIZE must be an integer between 0 and 32, got %q", getenv("SERVICER_KEY_POOL_SIZE", "2"))
+	}
+	cfg.ServicerKeyPoolSize = poolSize
 
 	if err := cfg.validate(); err != nil {
 		return Config{}, err

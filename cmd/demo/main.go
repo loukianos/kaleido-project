@@ -323,6 +323,61 @@ func run() error {
 		return fmt.Errorf("series loan minted on contract %d, want %d", seriesLoan.ContractID, series.ID)
 	}
 
+	// Pooled signing: concurrent servicer originations spread across the key pool instead of serializing on one nonce sequence.
+	const concurrentMints = 4
+	fmt.Printf("Originating %d loans concurrently across the servicer key pool\n", concurrentMints)
+	quiet := servicer
+	quiet.quiet = true
+	ids := make(chan int64, concurrentMints)
+	errs := make(chan error, concurrentMints)
+	for i := range concurrentMints {
+		go func(i int) {
+			var out struct {
+				ID int64 `json:"id"`
+			}
+			body := map[string]any{
+				"borrower_ref":    fmt.Sprintf("demo-pool-%d-%d", time.Now().Unix(), i),
+				"lender_address":  lender,
+				"principal_minor": 1000 + i,
+				"apr_bps":         100,
+				"term_days":       30,
+			}
+			// A fully busy pool returns 503 "retry shortly"; a real client retries, so the demo does too.
+			var err error
+			for attempt := 0; attempt < 10; attempt++ {
+				if err = quiet.post("/loans", body, &out); err == nil || !strings.Contains(err.Error(), "503") {
+					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			ids <- out.ID
+			errs <- err
+		}(i)
+	}
+	mintSigners := map[string]bool{}
+	for range concurrentMints {
+		if err := <-errs; err != nil {
+			return fmt.Errorf("concurrent origination: %w", err)
+		}
+	}
+	for range concurrentMints {
+		id := <-ids
+		var minted struct {
+			MintSignerAddress string `json:"mint_signer_address"`
+		}
+		if err := quiet.get(fmt.Sprintf("/loans/%d", id), &minted); err != nil {
+			return err
+		}
+		if minted.MintSignerAddress == "" {
+			return fmt.Errorf("loan %d has no recorded mint signer", id)
+		}
+		mintSigners[minted.MintSignerAddress] = true
+	}
+	fmt.Printf("%d concurrent mints were signed by %d distinct pool keys\n", concurrentMints, len(mintSigners))
+	if len(mintSigners) < 2 {
+		return errors.New("concurrent mints should have spread across at least two pool keys")
+	}
+
 	fmt.Println("Listing contracts")
 	if err := servicer.get("/contracts", nil); err != nil {
 		return err
@@ -368,6 +423,8 @@ type client struct {
 	baseURL string
 	http    *http.Client
 	token   string
+	// quiet suppresses response printing, for concurrent calls whose output would interleave.
+	quiet bool
 }
 
 func (c client) get(path string, out any) error {
@@ -413,11 +470,13 @@ func (c client) do(req *http.Request, out any) error {
 		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, bytes.TrimSpace(body))
 	}
 
-	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, body, "", "  "); err != nil {
-		fmt.Println(string(body))
-	} else {
-		fmt.Println(pretty.String())
+	if !c.quiet {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, body, "", "  "); err != nil {
+			fmt.Println(string(body))
+		} else {
+			fmt.Println(pretty.String())
+		}
 	}
 
 	if out != nil {

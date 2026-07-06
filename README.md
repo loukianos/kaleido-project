@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance
+make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance, mints concurrently across the servicer key pool
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -94,12 +94,17 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `OIDC_ISSUER_URL`      | local Keycloak realm                | Expected token issuer                     |
 | `OIDC_JWKS_URL`        | derived from issuer                 | Where the API fetches signing keys (compose overrides to the service-network URL) |
 | `OIDC_AUDIENCE`        | `loan-notes-api`                    | Expected token audience                   |
+| `SERVICER_KEY_POOL_SIZE` | `2`                               | Extra platform signing keys for concurrent servicer chain writes |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
 Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock keyed by chain id and signing address.
 That keeps multiple API instances from submitting transactions with the same nonce while leaving the runtime itself stateless.
-Because the lock is per key, custodial identities' writes never contend with each other or with the platform key; the remaining serialization point is platform-signed operations, which a pool of servicer keys could shard further.
+Because the lock is per key, custodial identities' writes never contend with each other or with the platform key.
+
+Platform-signed operations (originate, settle, default) go through a **servicer key pool**: `SERVICER_KEY_POOL_SIZE` extra keys, envelope-encrypted like lender keys and granted `ORIGINATOR_ROLE`/`SERVICER_ROLE` on every contract instance by the admin key.
+The submitter tries each pool member's lock with a rotating start and takes the first free one, so concurrent servicer writes spread across independent nonce sequences instead of serializing; grants are reconciled at startup and after each deploy, and every chain operation records which key signed it (`signer_address`).
+Pool keys sign lifecycle operations only — warehouse custody stays with the primary platform address, so they never hold assets.
 
 ## Authentication
 

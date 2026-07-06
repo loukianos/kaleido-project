@@ -55,6 +55,18 @@ func (r *Repository) CreateDeployOperation(ctx context.Context) (db.ChainOperati
 	})
 }
 
+func (r *Repository) CreateContractOperation(ctx context.Context, kind string, contractID int64) (db.ChainOperation, error) {
+	return r.queries.CreateChainOperation(ctx, db.CreateChainOperationParams{
+		Kind:       kind,
+		Status:     "created",
+		ContractID: db.Ptr(contractID),
+	})
+}
+
+func (r *Repository) SetOperationApplied(ctx context.Context, id int64) (db.ChainOperation, error) {
+	return r.queries.SetOperationApplied(ctx, id)
+}
+
 func (r *Repository) ActivateDeployedContract(ctx context.Context, opID int64, params db.CreateContractParams) (db.Contract, error) {
 	var contract db.Contract
 	err := db.WithTx(ctx, r.db, r.queries, func(q *db.Queries) error {

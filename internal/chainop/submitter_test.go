@@ -3,7 +3,9 @@ package chainop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -164,6 +166,68 @@ func neverSend(t *testing.T) func(*bind.TransactOpts, eth.ContractBackend) (*typ
 // testSignerKey is a throwaway key so the fake writer's default signer can produce real transact opts.
 const testSignerKey = "8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
 
+// testPool builds n distinct signers from deterministic throwaway keys.
+func testPool(t *testing.T, n int) []*eth.Signer {
+	t.Helper()
+	pool := make([]*eth.Signer, 0, n)
+	for i := 1; i <= n; i++ {
+		key := strings.Repeat(fmt.Sprintf("%02d", i), 32)
+		signer, err := eth.NewSigner(key)
+		require.NoError(t, err)
+		pool = append(pool, signer)
+	}
+	return pool
+}
+
+func TestSubmitAsAnyFallsThroughBusyLocks(t *testing.T) {
+	tx := newTestTx()
+	journal := &fakeJournal{}
+	pool := testPool(t, 3)
+	writer := &fakeWriter{backend: fakeBackend{receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful, TxHash: tx.Hash()}}}
+	// Every pool lock except the second signer's is held elsewhere.
+	locks := &fakeLockQueries{busyNames: map[string]bool{
+		eth.LockNameFor(writer.ChainID(), pool[0].Address()): true,
+		eth.LockNameFor(writer.ChainID(), pool[2].Address()): true,
+	}}
+	submitter := NewSubmitter(writer, db.NewLockManager(locks), "test-holder", journal)
+
+	txHash, _, err := submitter.SubmitAsAny(context.Background(), pool, 42, "test",
+		func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) { return tx, nil })
+
+	require.NoError(t, err)
+	require.Equal(t, tx.Hash().Hex(), txHash)
+	require.NotNil(t, journal.submitted)
+	require.Equal(t, pool[1].Address().Hex(), *journal.submitted.SignerAddress)
+}
+
+func TestSubmitAsAnyAllBusy(t *testing.T) {
+	journal := &fakeJournal{}
+	pool := testPool(t, 2)
+	writer := &fakeWriter{}
+	locks := &fakeLockQueries{busyNames: map[string]bool{
+		eth.LockNameFor(writer.ChainID(), pool[0].Address()): true,
+		eth.LockNameFor(writer.ChainID(), pool[1].Address()): true,
+	}}
+	submitter := NewSubmitter(writer, db.NewLockManager(locks), "test-holder", journal)
+
+	_, _, err := submitter.SubmitAsAny(context.Background(), pool, 42, "test", neverSend(t))
+
+	require.ErrorIs(t, err, db.ErrLockBusy)
+	require.NotNil(t, journal.retryable)
+	// Both locks were tried before giving up.
+	require.Len(t, locks.acquireNames, 2)
+}
+
+func TestSubmitAsAnyEmptyPool(t *testing.T) {
+	journal := &fakeJournal{}
+	submitter := newTestSubmitter(journal, &fakeLockQueries{}, nil)
+
+	_, _, err := submitter.SubmitAsAny(context.Background(), nil, 42, "test", neverSend(t))
+
+	require.Error(t, err)
+	require.NotNil(t, journal.retryable)
+}
+
 type fakeWriter struct {
 	backend eth.ContractBackend
 }
@@ -223,14 +287,20 @@ func (f *fakeJournal) SetOperationRetryable(_ context.Context, arg db.SetOperati
 
 type fakeLockQueries struct {
 	acquireErr     error
+	busyNames      map[string]bool
 	acquireHolders []string
+	acquireNames   []string
 	releaseCalls   int
 }
 
 func (f *fakeLockQueries) AcquireAppLock(_ context.Context, arg db.AcquireAppLockParams) (db.AppLock, error) {
 	f.acquireHolders = append(f.acquireHolders, arg.Holder)
+	f.acquireNames = append(f.acquireNames, arg.Name)
 	if f.acquireErr != nil {
 		return db.AppLock{}, f.acquireErr
+	}
+	if f.busyNames[arg.Name] {
+		return db.AppLock{}, pgx.ErrNoRows
 	}
 	return db.AppLock{Name: arg.Name, Holder: arg.Holder, ExpiresAt: arg.ExpiresAt}, nil
 }

@@ -17,7 +17,12 @@ import (
 	"kaleido-project/internal/keys"
 )
 
-const RoleLender = "lender"
+const (
+	RoleLender   = "lender"
+	RoleServicer = "servicer"
+	// PlatformIssuer marks platform-internal identities like servicer pool keys, which no external token ever names.
+	PlatformIssuer = "platform"
+)
 
 var (
 	ErrNoCustodialKey   = errors.New("no custodial key for this address")
@@ -110,6 +115,29 @@ func (s *Service) LenderAddress(ctx context.Context, issuer, subject string) (db
 // SignerForIdentity returns the signer for an identity's existing custodial key, or ErrNoCustodialKey when none was ever provisioned.
 func (s *Service) SignerForIdentity(ctx context.Context, identityID int64) (*eth.Signer, error) {
 	return s.signerForIdentity(ctx, identityID, false)
+}
+
+// EnsureServicerPool provisions size platform-internal servicer identities with signing keys and returns their signers.
+// Pool keys sign servicer chain writes so they don't serialize on one nonce sequence; they never hold assets.
+// Idempotent: existing pool identities get their existing keys back, so the pool is stable across restarts.
+func (s *Service) EnsureServicerPool(ctx context.Context, size int) ([]*eth.Signer, error) {
+	signers := make([]*eth.Signer, 0, size)
+	for i := 1; i <= size; i++ {
+		ident, err := s.store.GetOrCreateIdentity(ctx, db.GetOrCreateIdentityParams{
+			Issuer:  PlatformIssuer,
+			Subject: fmt.Sprintf("servicer-pool-%d", i),
+			Role:    RoleServicer,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get or create pool identity %d: %w", i, err)
+		}
+		signer, err := s.signerForIdentity(ctx, ident.ID, true)
+		if err != nil {
+			return nil, fmt.Errorf("provision pool key %d: %w", i, err)
+		}
+		signers = append(signers, signer)
+	}
+	return signers, nil
 }
 
 // SignerForAddress returns the signer for the custodial key holding address, or ErrNoCustodialKey when we don't hold it.

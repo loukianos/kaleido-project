@@ -5,6 +5,7 @@ package chainop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -77,6 +78,50 @@ func (s *Submitter) SubmitAs(
 	if err != nil {
 		return "", nil, s.Retryable(ctx, opID, err)
 	}
+	return s.submitLocked(ctx, signer, release, opID, action, send)
+}
+
+// poolSeq rotates the starting pool index across submissions so load spreads over the pool even without contention.
+var poolSeq atomic.Uint64
+
+// SubmitAsAny performs a single chain write signed by whichever pool signer's lock is free, falling through busy ones.
+// Every pool member must be equally authorized for the action; when all locks are busy the operation is retryable with ErrLockBusy, matching single-signer behavior.
+func (s *Submitter) SubmitAsAny(
+	ctx context.Context,
+	pool []*eth.Signer,
+	opID int64,
+	action string,
+	send func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error),
+) (string, *types.Receipt, error) {
+	if len(pool) == 0 {
+		return "", nil, s.Retryable(ctx, opID, fmt.Errorf("%s: signer pool is empty", action))
+	}
+
+	holder := fmt.Sprintf("%s#%d", s.holder, holderSeq.Add(1))
+	start := int(poolSeq.Add(1)) % len(pool)
+	for i := range pool {
+		signer := pool[(start+i)%len(pool)]
+		release, err := s.locks.Acquire(ctx, eth.LockNameFor(s.chain.ChainID(), signer.Address()), holder, lockTTL)
+		if errors.Is(err, db.ErrLockBusy) {
+			continue
+		}
+		if err != nil {
+			return "", nil, s.Retryable(ctx, opID, err)
+		}
+		return s.submitLocked(ctx, signer, release, opID, action, send)
+	}
+	return "", nil, s.Retryable(ctx, opID, db.ErrLockBusy)
+}
+
+// submitLocked runs the write while holding the signer's lock, releasing it once the transaction is in the pending pool.
+func (s *Submitter) submitLocked(
+	ctx context.Context,
+	signer *eth.Signer,
+	release func(context.Context) error,
+	opID int64,
+	action string,
+	send func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error),
+) (string, *types.Receipt, error) {
 	defer func() { _ = release(ctx) }()
 
 	backend, err := s.chain.Backend()
@@ -98,9 +143,10 @@ func (s *Submitter) SubmitAs(
 		return "", nil, s.Retryable(ctx, opID, fmt.Errorf("%s on chain: %w", action, err))
 	}
 	if _, err := s.journal.SetOperationSubmitted(ctx, db.SetOperationSubmittedParams{
-		ID:     opID,
-		TxHash: db.Ptr(tx.Hash().Hex()),
-		Nonce:  db.Ptr(int64(nonce)),
+		ID:            opID,
+		TxHash:        db.Ptr(tx.Hash().Hex()),
+		Nonce:         db.Ptr(int64(nonce)),
+		SignerAddress: db.Ptr(signer.Address().Hex()),
 	}); err != nil {
 		return "", nil, fmt.Errorf("mark %s submitted: %w", action, err)
 	}

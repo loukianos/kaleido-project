@@ -420,22 +420,23 @@ func handleListRepayments(logger *slog.Logger, service LoansService, identities 
 }
 
 type loanResponse struct {
-	ID               int64  `json:"id"`
-	TokenID          string `json:"token_id,omitempty"`
-	ContractID       int64  `json:"contract_id,omitempty"`
-	BorrowerRef      string `json:"borrower_ref"`
-	LenderAddress    string `json:"lender_address"`
-	LenderSubject    string `json:"lender_subject,omitempty"`
-	PrincipalMinor   int64  `json:"principal_minor"`
-	APRBps           int32  `json:"apr_bps"`
-	TermDays         int64  `json:"term_days"`
-	InterestDueMinor int64  `json:"interest_due_minor"`
-	TotalDueMinor    int64  `json:"total_due_minor"`
-	OutstandingMinor int64  `json:"outstanding_minor"`
-	Status           string `json:"status"`
-	OperationID      int64  `json:"operation_id,omitempty"`
-	TxHash           string `json:"tx_hash,omitempty"`
-	OwnerAddress     string `json:"owner_address,omitempty"`
+	ID                int64  `json:"id"`
+	TokenID           string `json:"token_id,omitempty"`
+	ContractID        int64  `json:"contract_id,omitempty"`
+	BorrowerRef       string `json:"borrower_ref"`
+	LenderAddress     string `json:"lender_address"`
+	LenderSubject     string `json:"lender_subject,omitempty"`
+	PrincipalMinor    int64  `json:"principal_minor"`
+	APRBps            int32  `json:"apr_bps"`
+	TermDays          int64  `json:"term_days"`
+	InterestDueMinor  int64  `json:"interest_due_minor"`
+	TotalDueMinor     int64  `json:"total_due_minor"`
+	OutstandingMinor  int64  `json:"outstanding_minor"`
+	Status            string `json:"status"`
+	OperationID       int64  `json:"operation_id,omitempty"`
+	TxHash            string `json:"tx_hash,omitempty"`
+	OwnerAddress      string `json:"owner_address,omitempty"`
+	MintSignerAddress string `json:"mint_signer_address,omitempty"`
 }
 
 type repaymentResultResponse struct {
@@ -503,6 +504,7 @@ func loanResponseFromRead(result loans.ReadResult) loanResponse {
 	response.TxHash = result.MintTxHash
 	response.OwnerAddress = result.OwnerAddress
 	response.LenderSubject = result.LenderSubject
+	response.MintSignerAddress = result.MintSignerAddress
 	return response
 }
 
