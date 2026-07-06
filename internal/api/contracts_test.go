@@ -31,11 +31,12 @@ func TestDeployContract(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/deploy", strings.NewReader(`{"base_uri":"https://example.test/loans/"}`))
+	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/deploy", strings.NewReader(`{"base_uri":"https://example.test/loans/","activate":true}`))
 	handler.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, "https://example.test/loans/", service.deployBaseURI)
+	require.True(t, service.deployActivate)
 
 	var body contractResponse
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
@@ -56,16 +57,87 @@ func TestDeployContractLockBusy(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
 
-func TestDeployContractAlreadyDeployed(t *testing.T) {
+func TestListContracts(t *testing.T) {
 	handler := newTestHandler(Options{
-		Contracts: &fakeContractsService{deployErr: contracts.ErrContractAlreadyDeployed},
+		Contracts: &fakeContractsService{
+			listContracts: []db.Contract{
+				{ID: 1, ChainID: 1337, Address: "0x123", BaseUri: "http://localhost:8080/loans/", Active: false},
+				{ID: 2, ChainID: 1337, Address: "0x456", BaseUri: "http://localhost:8080/loans/", Active: true},
+			},
+		},
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/deploy", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodGet, "/contracts", nil)
 	handler.ServeHTTP(recorder, request)
 
-	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var body contractsListResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Len(t, body.Contracts, 2)
+	require.Equal(t, "0x123", body.Contracts[0].Address)
+	require.True(t, body.Contracts[1].Active)
+}
+
+func TestGetContract(t *testing.T) {
+	service := &fakeContractsService{
+		contract: db.Contract{ID: 3, ChainID: 1337, Address: "0x789", BaseUri: "http://localhost:8080/loans/"},
+	}
+	handler := newTestHandler(Options{Contracts: service})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/contracts/3", nil)
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(3), service.contractID)
+
+	var body contractResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, "0x789", body.Address)
+}
+
+func TestGetContractNotFound(t *testing.T) {
+	handler := newTestHandler(Options{
+		Contracts: &fakeContractsService{contractErr: contracts.ErrContractNotFound},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/contracts/99", nil)
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestActivateContract(t *testing.T) {
+	service := &fakeContractsService{
+		activateContract: db.Contract{ID: 3, ChainID: 1337, Address: "0x789", BaseUri: "http://localhost:8080/loans/", Active: true},
+	}
+	handler := newTestHandler(Options{Contracts: service})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/3/activate", nil)
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(3), service.activateID)
+
+	var body contractResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.True(t, body.Active)
+}
+
+func TestActivateContractNotFound(t *testing.T) {
+	handler := newTestHandler(Options{
+		Contracts: &fakeContractsService{activateErr: contracts.ErrContractNotFound},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/99/activate", nil)
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
 func TestActiveContract(t *testing.T) {
@@ -105,15 +177,25 @@ func TestActiveContractNotFound(t *testing.T) {
 }
 
 type fakeContractsService struct {
-	deployBaseURI  string
-	deployContract db.Contract
-	deployErr      error
-	activeContract db.Contract
-	activeErr      error
+	deployBaseURI    string
+	deployActivate   bool
+	deployContract   db.Contract
+	deployErr        error
+	activeContract   db.Contract
+	activeErr        error
+	listContracts    []db.Contract
+	listErr          error
+	contractID       int64
+	contract         db.Contract
+	contractErr      error
+	activateID       int64
+	activateContract db.Contract
+	activateErr      error
 }
 
-func (f *fakeContractsService) Deploy(_ context.Context, baseURI string) (db.Contract, error) {
+func (f *fakeContractsService) Deploy(_ context.Context, baseURI string, activate bool) (db.Contract, error) {
 	f.deployBaseURI = baseURI
+	f.deployActivate = activate
 	if f.deployErr != nil {
 		return db.Contract{}, f.deployErr
 	}
@@ -128,4 +210,24 @@ func (f *fakeContractsService) ActiveContract(context.Context) (db.Contract, err
 		return db.Contract{}, errors.New("missing fake active contract")
 	}
 	return f.activeContract, nil
+}
+
+func (f *fakeContractsService) ListContracts(context.Context) ([]db.Contract, error) {
+	return f.listContracts, f.listErr
+}
+
+func (f *fakeContractsService) Contract(_ context.Context, id int64) (db.Contract, error) {
+	f.contractID = id
+	if f.contractErr != nil {
+		return db.Contract{}, f.contractErr
+	}
+	return f.contract, nil
+}
+
+func (f *fakeContractsService) Activate(_ context.Context, id int64) (db.Contract, error) {
+	f.activateID = id
+	if f.activateErr != nil {
+		return db.Contract{}, f.activateErr
+	}
+	return f.activateContract, nil
 }

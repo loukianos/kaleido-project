@@ -9,6 +9,30 @@ import (
 	"context"
 )
 
+const activateContract = `-- name: ActivateContract :one
+UPDATE contracts
+SET active = true,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, chain_id, address, deploy_tx_hash, base_uri, active, created_at, updated_at
+`
+
+func (q *Queries) ActivateContract(ctx context.Context, id int64) (Contract, error) {
+	row := q.db.QueryRow(ctx, activateContract, id)
+	var i Contract
+	err := row.Scan(
+		&i.ID,
+		&i.ChainID,
+		&i.Address,
+		&i.DeployTxHash,
+		&i.BaseUri,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createContract = `-- name: CreateContract :one
 INSERT INTO contracts (
     chain_id,
@@ -50,6 +74,19 @@ func (q *Queries) CreateContract(ctx context.Context, arg CreateContractParams) 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deactivateActiveContract = `-- name: DeactivateActiveContract :exec
+UPDATE contracts
+SET active = false,
+    updated_at = now()
+WHERE chain_id = $1
+  AND active = true
+`
+
+func (q *Queries) DeactivateActiveContract(ctx context.Context, chainID int64) error {
+	_, err := q.db.Exec(ctx, deactivateActiveContract, chainID)
+	return err
 }
 
 const getActiveContractByChainID = `-- name: GetActiveContractByChainID :one
@@ -95,4 +132,40 @@ func (q *Queries) GetContractByID(ctx context.Context, id int64) (Contract, erro
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listContractsByChainID = `-- name: ListContractsByChainID :many
+SELECT id, chain_id, address, deploy_tx_hash, base_uri, active, created_at, updated_at
+FROM contracts
+WHERE chain_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListContractsByChainID(ctx context.Context, chainID int64) ([]Contract, error) {
+	rows, err := q.db.Query(ctx, listContractsByChainID, chainID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Contract
+	for rows.Next() {
+		var i Contract
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChainID,
+			&i.Address,
+			&i.DeployTxHash,
+			&i.BaseUri,
+			&i.Active,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

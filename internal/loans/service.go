@@ -49,6 +49,8 @@ type OriginateRequest struct {
 	PrincipalMinor int64
 	APRBps         uint16
 	TermDays       int64
+	// ContractID selects the loan series to originate into; nil means the chain's active contract.
+	ContractID *int64
 }
 
 type OriginateResult struct {
@@ -170,12 +172,26 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 		return OriginateResult{}, err
 	}
 
-	contract, err := s.repo.ActiveContract(ctx, s.chain.ChainID().Int64())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return OriginateResult{}, ErrNoActiveContract
-	}
-	if err != nil {
-		return OriginateResult{}, fmt.Errorf("get active contract: %w", err)
+	var contract db.Contract
+	if req.ContractID != nil {
+		contract, err = s.repo.Contract(ctx, *req.ContractID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OriginateResult{}, contractpkg.ErrContractNotFound
+		}
+		if err != nil {
+			return OriginateResult{}, fmt.Errorf("get contract: %w", err)
+		}
+		if contract.ChainID != s.chain.ChainID().Int64() {
+			return OriginateResult{}, contractpkg.ErrContractNotFound
+		}
+	} else {
+		contract, err = s.repo.ActiveContract(ctx, s.chain.ChainID().Int64())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OriginateResult{}, ErrNoActiveContract
+		}
+		if err != nil {
+			return OriginateResult{}, fmt.Errorf("get active contract: %w", err)
+		}
 	}
 
 	loan, op, err := s.repo.CreateOrigination(ctx, CreateOriginationParams{

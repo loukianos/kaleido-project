@@ -20,3 +20,23 @@ WHERE chain_id = $1
 SELECT *
 FROM contracts
 WHERE id = $1;
+
+-- name: ListContractsByChainID :many
+SELECT *
+FROM contracts
+WHERE chain_id = $1
+ORDER BY id;
+
+-- name: DeactivateActiveContract :exec
+UPDATE contracts
+SET active = false,
+    updated_at = now()
+WHERE chain_id = $1
+  AND active = true;
+
+-- name: ActivateContract :one
+UPDATE contracts
+SET active = true,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;

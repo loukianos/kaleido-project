@@ -15,7 +15,7 @@ import (
 	"kaleido-project/internal/eth"
 )
 
-var ErrContractAlreadyDeployed = errors.New("contract already deployed for this chain")
+var ErrContractNotFound = errors.New("contract not found for this chain")
 
 const deployOperationKind = "deploy_contract"
 
@@ -39,14 +39,44 @@ func (s *Service) ActiveContract(ctx context.Context) (db.Contract, error) {
 	return s.repo.ActiveContract(ctx, s.chain.ChainID().Int64())
 }
 
-func (s *Service) Deploy(ctx context.Context, baseURI string) (db.Contract, error) {
+func (s *Service) ListContracts(ctx context.Context) ([]db.Contract, error) {
+	return s.repo.ListContracts(ctx, s.chain.ChainID().Int64())
+}
+
+// Contract returns the contract by id, treating ids from other chains as not found.
+func (s *Service) Contract(ctx context.Context, id int64) (db.Contract, error) {
+	contract, err := s.repo.Contract(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Contract{}, ErrContractNotFound
+	}
+	if err != nil {
+		return db.Contract{}, err
+	}
+	if contract.ChainID != s.chain.ChainID().Int64() {
+		return db.Contract{}, ErrContractNotFound
+	}
+	return contract, nil
+}
+
+// Activate makes the contract the chain's default for new originations.
+func (s *Service) Activate(ctx context.Context, id int64) (db.Contract, error) {
+	contract, err := s.Contract(ctx, id)
+	if err != nil {
+		return db.Contract{}, err
+	}
+	return s.repo.Activate(ctx, contract.ID, contract.ChainID)
+}
+
+// Deploy deploys a new LoanNote instance; each instance is its own loan series.
+// The chain's first contract becomes the origination default automatically; later deploys only take over the default when activate is set.
+func (s *Service) Deploy(ctx context.Context, baseURI string, activate bool) (db.Contract, error) {
 	if baseURI == "" {
 		baseURI = s.baseURI
 	}
 
-	if _, err := s.repo.ActiveContract(ctx, s.chain.ChainID().Int64()); err == nil {
-		return db.Contract{}, ErrContractAlreadyDeployed
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := s.repo.ActiveContract(ctx, s.chain.ChainID().Int64()); errors.Is(err, pgx.ErrNoRows) {
+		activate = true
+	} else if err != nil {
 		return db.Contract{}, fmt.Errorf("check existing contract: %w", err)
 	}
 
@@ -74,7 +104,7 @@ func (s *Service) Deploy(ctx context.Context, baseURI string) (db.Contract, erro
 		Address:      address.Hex(),
 		DeployTxHash: db.Ptr(txHash),
 		BaseUri:      baseURI,
-		Active:       true,
+		Active:       activate,
 	})
 	if err != nil {
 		return db.Contract{}, err

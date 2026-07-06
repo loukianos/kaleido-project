@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"kaleido-project/db/sqlc"
+	"kaleido-project/internal/contracts"
 	"kaleido-project/internal/loans"
 )
 
@@ -53,6 +54,7 @@ func TestCreateLoan(t *testing.T) {
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, int64(100_00), service.request.PrincipalMinor)
 	require.Equal(t, uint16(800), service.request.APRBps)
+	require.Nil(t, service.request.ContractID)
 
 	var body loanResponse
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
@@ -60,6 +62,62 @@ func TestCreateLoan(t *testing.T) {
 	require.Equal(t, "0", body.TokenID)
 	require.Equal(t, int64(11), body.OperationID)
 	require.Equal(t, "0xabc", body.TxHash)
+}
+
+func TestCreateLoanWithContractID(t *testing.T) {
+	service := &fakeLoansService{
+		result: loans.OriginateResult{
+			Loan: db.Loan{
+				ID:            8,
+				TokenID:       db.Ptr("0"),
+				ContractID:    db.Ptr(int64(2)),
+				BorrowerRef:   "borrower-1",
+				LenderAddress: "0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73",
+				Status:        "active",
+			},
+		},
+	}
+	handler := newTestHandler(Options{
+		Loans: service,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{
+		"borrower_ref":"borrower-1",
+		"lender_address":"0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73",
+		"principal_minor":10000,
+		"apr_bps":800,
+		"term_days":365,
+		"contract_id":2
+	}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	require.NotNil(t, service.request.ContractID)
+	require.Equal(t, int64(2), *service.request.ContractID)
+
+	var body loanResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, int64(2), body.ContractID)
+}
+
+func TestCreateLoanContractNotFound(t *testing.T) {
+	handler := newTestHandler(Options{
+		Loans: &fakeLoansService{err: contracts.ErrContractNotFound},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{
+		"borrower_ref":"borrower-1",
+		"lender_address":"0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73",
+		"principal_minor":10000,
+		"apr_bps":800,
+		"term_days":365,
+		"contract_id":99
+	}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
 }
 
 func TestCreateLoanValidation(t *testing.T) {

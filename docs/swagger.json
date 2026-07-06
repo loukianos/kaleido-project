@@ -28,7 +28,7 @@
         },
         "/admin/contracts/deploy": {
             "post": {
-                "description": "Deploys a LoanNote contract and makes it active. At most one contract can exist per chain. Subsequent deploys fail with a conflict error message.",
+                "description": "Deploys a new LoanNote contract instance; each instance is its own loan series. The chain's first contract becomes the origination default; later deploys only take over the default when activate is true.",
                 "consumes": [
                     "application/json"
                 ],
@@ -38,10 +38,10 @@
                 "tags": [
                     "contracts"
                 ],
-                "summary": "Deploy LoanNote contract",
+                "summary": "Deploy a LoanNote contract",
                 "parameters": [
                     {
-                        "description": "Optional base URI override. Empty body uses the configured default",
+                        "description": "Optional base URI override and activation flag. Empty body uses the configured default base URI",
                         "name": "request",
                         "in": "body",
                         "schema": {
@@ -62,16 +62,70 @@
                             "$ref": "#/definitions/api.errorResponse"
                         }
                     },
-                    "409": {
-                        "description": "A contract is already deployed for this chain",
-                        "schema": {
-                            "$ref": "#/definitions/api.errorResponse"
-                        }
-                    },
                     "503": {
                         "description": "Another chain operation is in progress, retry shortly",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/contracts/{id}/activate": {
+            "post": {
+                "description": "Makes the contract the default for new originations, replacing the current default.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contracts"
+                ],
+                "summary": "Activate contract",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Contract ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.contractResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/contracts": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contracts"
+                ],
+                "summary": "List contracts",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.contractsListResponse"
                         }
                     }
                 }
@@ -91,6 +145,46 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.contractResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/contracts/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contracts"
+                ],
+                "summary": "Get contract",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Contract ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.contractResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
                         }
                     },
                     "404": {
@@ -556,6 +650,17 @@
                 }
             }
         },
+        "api.contractsListResponse": {
+            "type": "object",
+            "properties": {
+                "contracts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.contractResponse"
+                    }
+                }
+            }
+        },
         "api.createLoanRequest": {
             "type": "object",
             "properties": {
@@ -564,6 +669,10 @@
                 },
                 "borrower_ref": {
                     "type": "string"
+                },
+                "contract_id": {
+                    "description": "ContractID selects the loan series to originate into; omit it to use the chain's active contract.",
+                    "type": "integer"
                 },
                 "lender_address": {
                     "type": "string"
@@ -590,6 +699,10 @@
         "api.deployContractRequest": {
             "type": "object",
             "properties": {
+                "activate": {
+                    "description": "Activate makes the new contract the default for new originations, replacing the current default.\nThe chain's first contract always becomes the default regardless of this flag.",
+                    "type": "boolean"
+                },
                 "base_uri": {
                     "type": "string"
                 }
@@ -620,6 +733,9 @@
                 },
                 "borrower_ref": {
                     "type": "string"
+                },
+                "contract_id": {
+                    "type": "integer"
                 },
                 "id": {
                     "type": "integer"
