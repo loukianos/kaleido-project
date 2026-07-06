@@ -96,6 +96,8 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `OIDC_AUDIENCE`        | `loan-notes-api`                    | Expected token audience                   |
 | `SERVICER_KEY_POOL_SIZE` | `2`                               | Extra platform signing keys for concurrent servicer chain writes |
 | `RECONCILE_INTERVAL_SECONDS` | `5`                           | How often the reconciler drains pending chain operations |
+| `KEY_ENCRYPTOR`        | `local-aes-gcm`                     | Signing-key encryption backend: `local-aes-gcm` or `aws-kms` |
+| `KMS_KEY_ID`           | —                                   | KMS key id, required when `KEY_ENCRYPTOR=aws-kms`          |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
@@ -206,6 +208,31 @@ Bypass the hooks with `git commit --no-verify`.
 ```bash
 make test # unit tests, race detector on
 ```
+
+## Cloud deployment (EKS)
+
+`deploy/terraform` provisions the production stack in AWS (profile `loukianos`, region `us-east-1`): a VPC, an EKS cluster with managed nodes and the EBS CSI addon, RDS Postgres, an ECR repository, a KMS key for signing-key encryption, and an IRSA role scoping the API pods to `kms:Encrypt`/`kms:Decrypt` on that one key.
+In the cloud the API runs with `KEY_ENCRYPTOR=aws-kms`: custodial key material is sealed by KMS instead of a local master key, so the plaintext master key never exists in the cluster — the same `keys.Encryptor` seam, a stronger backend.
+
+The Besu network runs in-cluster via the same Paladin operator install as local development, and Keycloak runs in-cluster from the same seeded realm, so the cloud environment is the local one writ large.
+
+```bash
+make cloud-up         # terraform apply: VPC, EKS, RDS, ECR, KMS (~20 minutes)
+make cloud-besu-up    # install the Paladin/Besu network on the cluster
+make cloud-push       # build the linux/amd64 image and push to ECR
+make cloud-deploy     # helm install: migrations, API, Keycloak; wires public LB endpoints in a second pass
+make cloud-demo       # run the full demo against the cloud deployment
+make cloud-ci-config  # one-time: seed GitHub variables/secrets for the deploy workflow
+make cloud-down       # tear everything down
+```
+
+`cloud-deploy` runs in two phases because token issuers must match what callers see: the first install brings everything up behind LoadBalancers, and the second pass sets `OIDC_ISSUER_URL` and `LOAN_BASE_URI` to the LB hostnames once they exist.
+JWKS is still fetched over the cluster network — the same issuer/JWKS split used in docker-compose.
+
+### Continuous deployment
+
+`.github/workflows/deploy.yml` deploys every push to `main`: build and push to ECR, `helm upgrade`, then the full demo runs against the deployment as a smoke test.
+It reads the repo variables/secrets seeded by `make cloud-ci-config`, using the `github-actions-deployer` IAM user credentials stored as repo secrets.
 
 ## CI
 

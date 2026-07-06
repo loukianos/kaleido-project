@@ -10,3 +10,7 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+# Terraform local state and plugins; the lock file is committed, state stays local
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/tfplan

@@ -186,7 +186,7 @@ func (s *Service) provisionKey(ctx context.Context, identityID int64) (*eth.Sign
 		IdentityID: identityID,
 		Address:    signer.Address().Hex(),
 		Ciphertext: ciphertext,
-		Encryptor:  keys.AESGCMScheme,
+		Encryptor:  s.encryptor.Scheme(),
 		KeyVersion: int32(version),
 	}); err != nil {
 		// A concurrent request provisioned this identity's key first; use theirs and discard ours.
@@ -204,8 +204,8 @@ func (s *Service) provisionKey(ctx context.Context, identityID int64) (*eth.Sign
 }
 
 func (s *Service) decryptSigner(ctx context.Context, row db.SigningKey) (*eth.Signer, error) {
-	if row.Encryptor != keys.AESGCMScheme {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownEncryptor, row.Encryptor)
+	if row.Encryptor != s.encryptor.Scheme() {
+		return nil, fmt.Errorf("%w: row sealed by %s, service configured for %s", ErrUnknownEncryptor, row.Encryptor, s.encryptor.Scheme())
 	}
 	plaintext, err := s.encryptor.Decrypt(ctx, row.Ciphertext, int(row.KeyVersion))
 	if err != nil {
