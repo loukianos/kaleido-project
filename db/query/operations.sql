@@ -19,6 +19,7 @@ UPDATE chain_operations
 SET status = 'submitted',
     tx_hash = $2,
     nonce = $3,
+    signer_address = $4,
     error = NULL,
     updated_at = now()
 WHERE id = $1

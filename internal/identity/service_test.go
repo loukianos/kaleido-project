@@ -121,6 +121,28 @@ func TestLenderAddressRequiresOnboarding(t *testing.T) {
 	require.Equal(t, signer.Address(), address)
 }
 
+func TestEnsureServicerPool(t *testing.T) {
+	service, store := newTestService(t)
+
+	pool, err := service.EnsureServicerPool(context.Background(), 3)
+	require.NoError(t, err)
+	require.Len(t, pool, 3)
+
+	seen := map[string]bool{}
+	for _, signer := range pool {
+		require.False(t, seen[signer.Address().Hex()], "pool keys must be distinct")
+		seen[signer.Address().Hex()] = true
+	}
+	require.Equal(t, RoleServicer, store.identities[PlatformIssuer+"/servicer-pool-1"].Role)
+
+	// Idempotent across restarts: the same keys come back.
+	again, err := service.EnsureServicerPool(context.Background(), 3)
+	require.NoError(t, err)
+	for i := range pool {
+		require.Equal(t, pool[i].Address(), again[i].Address())
+	}
+}
+
 func TestSignerForAddress(t *testing.T) {
 	service, _ := newTestService(t)
 

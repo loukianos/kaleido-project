@@ -863,6 +863,9 @@ const docTemplate = `{
                 "lender_subject": {
                     "type": "string"
                 },
+                "mint_signer_address": {
+                    "type": "string"
+                },
                 "operation_id": {
                     "type": "integer"
                 },

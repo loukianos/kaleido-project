@@ -17,6 +17,7 @@ services:
       # JWKS is fetched by compose service name; tokens carry the host-published issuer above.
       OIDC_JWKS_URL: "${API_OIDC_JWKS_URL:-http://keycloak:8080/realms/loan-notes/protocol/openid-connect/certs}"
       OIDC_AUDIENCE: "${OIDC_AUDIENCE:-loan-notes-api}"
+      SERVICER_KEY_POOL_SIZE: "${SERVICER_KEY_POOL_SIZE:-2}"
     depends_on:
       postgres:
         condition: service_healthy

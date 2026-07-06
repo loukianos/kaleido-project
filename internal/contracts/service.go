@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/jackc/pgx/v5"
 
 	db "kaleido-project/db/sqlc"
@@ -17,21 +18,33 @@ import (
 
 var ErrContractNotFound = errors.New("contract not found for this chain")
 
-const deployOperationKind = "deploy_contract"
+const (
+	deployOperationKind    = "deploy_contract"
+	grantRoleOperationKind = "grant_role"
+)
+
+// Role ids mirror the contract's keccak256 constants so grants don't need a chain read first.
+var (
+	originatorRole = crypto.Keccak256Hash([]byte("ORIGINATOR_ROLE"))
+	servicerRole   = crypto.Keccak256Hash([]byte("SERVICER_ROLE"))
+)
 
 type Service struct {
 	repo      *Repository
 	chain     eth.Writer
 	submitter *chainop.Submitter
 	baseURI   string
+	// poolAddresses are the servicer pool keys that must hold the business roles on every contract instance.
+	poolAddresses []common.Address
 }
 
-func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, baseURI string, lockHolder string) *Service {
+func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, baseURI string, lockHolder string, poolAddresses []common.Address) *Service {
 	return &Service{
-		repo:      repo,
-		chain:     chain,
-		submitter: chainop.NewSubmitter(chain, locks, lockHolder, repo),
-		baseURI:   baseURI,
+		repo:          repo,
+		chain:         chain,
+		submitter:     chainop.NewSubmitter(chain, locks, lockHolder, repo),
+		baseURI:       baseURI,
+		poolAddresses: poolAddresses,
 	}
 }
 
@@ -110,5 +123,73 @@ func (s *Service) Deploy(ctx context.Context, baseURI string, activate bool) (db
 		return db.Contract{}, err
 	}
 
+	// The constructor grants roles only to the admin key; pool keys get theirs here.
+	// The contract is recorded either way: grants are idempotent, and the startup reconcile heals any that failed.
+	if err := s.EnsureRoles(ctx, contract); err != nil {
+		return contract, fmt.Errorf("contract %d deployed but pool role grants failed: %w", contract.ID, err)
+	}
+
 	return contract, nil
+}
+
+// EnsureRoles grants the business roles to every pool key that is missing them on the contract, signed by the admin key.
+// Idempotent: keys that already hold a role are skipped, so it doubles as the startup reconcile for pre-existing contracts.
+func (s *Service) EnsureRoles(ctx context.Context, contract db.Contract) error {
+	if len(s.poolAddresses) == 0 {
+		return nil
+	}
+	backend, err := s.chain.Backend()
+	if err != nil {
+		return fmt.Errorf("get backend: %w", err)
+	}
+	note, err := NewLoanNote(common.HexToAddress(contract.Address), backend)
+	if err != nil {
+		return fmt.Errorf("bind loan note: %w", err)
+	}
+
+	for _, address := range s.poolAddresses {
+		for _, role := range [][32]byte{originatorRole, servicerRole} {
+			has, err := note.HasRole(&bind.CallOpts{Context: ctx}, role, address)
+			if err != nil {
+				return fmt.Errorf("check role on contract %d: %w", contract.ID, err)
+			}
+			if has {
+				continue
+			}
+
+			op, err := s.repo.CreateContractOperation(ctx, grantRoleOperationKind, contract.ID)
+			if err != nil {
+				return fmt.Errorf("create grant operation: %w", err)
+			}
+			_, _, err = s.submitter.Submit(ctx, op.ID, "grant role",
+				func(auth *bind.TransactOpts, backend eth.ContractBackend) (*types.Transaction, error) {
+					note, err := NewLoanNote(common.HexToAddress(contract.Address), backend)
+					if err != nil {
+						return nil, fmt.Errorf("bind loan note: %w", err)
+					}
+					return note.GrantRole(auth, role, address)
+				})
+			if err != nil {
+				return fmt.Errorf("grant role to %s on contract %d: %w", address.Hex(), contract.ID, err)
+			}
+			if _, err := s.repo.SetOperationApplied(ctx, op.ID); err != nil {
+				return fmt.Errorf("mark grant applied: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// EnsureAllRoles reconciles pool role grants across every contract on this chain.
+func (s *Service) EnsureAllRoles(ctx context.Context) error {
+	contracts, err := s.ListContracts(ctx)
+	if err != nil {
+		return fmt.Errorf("list contracts: %w", err)
+	}
+	for _, contract := range contracts {
+		if err := s.EnsureRoles(ctx, contract); err != nil {
+			return err
+		}
+	}
+	return nil
 }

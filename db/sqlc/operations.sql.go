@@ -14,7 +14,7 @@ UPDATE chain_operations
 SET contract_id = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 type AttachOperationContractParams struct {
@@ -36,6 +36,7 @@ func (q *Queries) AttachOperationContract(ctx context.Context, arg AttachOperati
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
@@ -49,7 +50,7 @@ INSERT INTO chain_operations (
 ) VALUES (
     $1, $2, $3, $4
 )
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 type CreateChainOperationParams struct {
@@ -78,12 +79,13 @@ func (q *Queries) CreateChainOperation(ctx context.Context, arg CreateChainOpera
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
 
 const getChainOperationByID = `-- name: GetChainOperationByID :one
-SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+SELECT id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 FROM chain_operations
 WHERE id = $1
 `
@@ -102,6 +104,7 @@ func (q *Queries) GetChainOperationByID(ctx context.Context, id int64) (ChainOpe
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
@@ -112,7 +115,7 @@ SET status = 'applied',
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 func (q *Queries) SetOperationApplied(ctx context.Context, id int64) (ChainOperation, error) {
@@ -129,6 +132,7 @@ func (q *Queries) SetOperationApplied(ctx context.Context, id int64) (ChainOpera
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
@@ -139,7 +143,7 @@ SET status = 'mined',
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 func (q *Queries) SetOperationMined(ctx context.Context, id int64) (ChainOperation, error) {
@@ -156,6 +160,7 @@ func (q *Queries) SetOperationMined(ctx context.Context, id int64) (ChainOperati
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
@@ -166,7 +171,7 @@ SET status = 'retryable',
     error = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 type SetOperationRetryableParams struct {
@@ -188,6 +193,7 @@ func (q *Queries) SetOperationRetryable(ctx context.Context, arg SetOperationRet
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }
@@ -197,20 +203,27 @@ UPDATE chain_operations
 SET status = 'submitted',
     tx_hash = $2,
     nonce = $3,
+    signer_address = $4,
     error = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at
+RETURNING id, kind, status, contract_id, loan_id, tx_hash, nonce, error, created_at, updated_at, signer_address
 `
 
 type SetOperationSubmittedParams struct {
-	ID     int64
-	TxHash *string
-	Nonce  *int64
+	ID            int64
+	TxHash        *string
+	Nonce         *int64
+	SignerAddress *string
 }
 
 func (q *Queries) SetOperationSubmitted(ctx context.Context, arg SetOperationSubmittedParams) (ChainOperation, error) {
-	row := q.db.QueryRow(ctx, setOperationSubmitted, arg.ID, arg.TxHash, arg.Nonce)
+	row := q.db.QueryRow(ctx, setOperationSubmitted,
+		arg.ID,
+		arg.TxHash,
+		arg.Nonce,
+		arg.SignerAddress,
+	)
 	var i ChainOperation
 	err := row.Scan(
 		&i.ID,
@@ -223,6 +236,7 @@ func (q *Queries) SetOperationSubmitted(ctx context.Context, arg SetOperationSub
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignerAddress,
 	)
 	return i, err
 }

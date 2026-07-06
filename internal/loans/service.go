@@ -62,6 +62,8 @@ type Service struct {
 	identities IdentityResolver
 	// issuer qualifies subjects named in request bodies; authenticated callers carry their own issuer, and the API accepts a single one.
 	issuer string
+	// platformPool are the signers for servicer operations: the primary key plus the role-granted pool, so concurrent writes don't serialize on one nonce sequence.
+	platformPool []*eth.Signer
 }
 
 type OriginateRequest struct {
@@ -121,6 +123,8 @@ type ReadResult struct {
 	LenderSubject string
 	OwnerAddress  string
 	MintTxHash    string
+	// MintSignerAddress is the pool key that signed the mint, surfaced for auditability.
+	MintSignerAddress string
 }
 
 type ListRequest struct {
@@ -132,13 +136,14 @@ type ListRequest struct {
 	Offset           int32
 }
 
-func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string, identities IdentityResolver, issuer string) *Service {
+func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string, identities IdentityResolver, issuer string, poolSigners []*eth.Signer) *Service {
 	return &Service{
-		repo:       repo,
-		chain:      chain,
-		submitter:  chainop.NewSubmitter(chain, locks, lockHolder, repo),
-		identities: identities,
-		issuer:     issuer,
+		repo:         repo,
+		chain:        chain,
+		submitter:    chainop.NewSubmitter(chain, locks, lockHolder, repo),
+		identities:   identities,
+		issuer:       issuer,
+		platformPool: append([]*eth.Signer{chain.DefaultSigner()}, poolSigners...),
 	}
 }
 
@@ -156,6 +161,9 @@ func (s *Service) Get(ctx context.Context, id int64) (ReadResult, error) {
 		}
 		if op.TxHash != nil {
 			result.MintTxHash = *op.TxHash
+		}
+		if op.SignerAddress != nil {
+			result.MintSignerAddress = *op.SignerAddress
 		}
 	}
 
@@ -503,6 +511,7 @@ func (s *Service) settle(ctx context.Context, loan db.Loan, op db.ChainOperation
 }
 
 // submitOperation performs a single platform-signed write against the loan-note contract at contractAddress.
+// Any free pool signer serves: they all hold the business roles, so servicer operations spread across nonce sequences instead of serializing.
 func (s *Service) submitOperation(
 	ctx context.Context,
 	opID int64,
@@ -510,7 +519,8 @@ func (s *Service) submitOperation(
 	action string,
 	send func(*bind.TransactOpts, *contractpkg.LoanNote) (*types.Transaction, error),
 ) (string, *types.Receipt, error) {
-	return s.submitOperationAs(ctx, s.chain.DefaultSigner(), opID, contractAddress, action, send)
+	return s.submitter.SubmitAsAny(ctx, s.platformPool, opID, action,
+		bindNote(contractAddress, send))
 }
 
 // submitOperationAs performs a single write signed by signer, binding the contract and delegating the tracked submission to the shared chainop submitter.
@@ -523,13 +533,21 @@ func (s *Service) submitOperationAs(
 	send func(*bind.TransactOpts, *contractpkg.LoanNote) (*types.Transaction, error),
 ) (string, *types.Receipt, error) {
 	return s.submitter.SubmitAs(ctx, signer, opID, action,
-		func(auth *bind.TransactOpts, backend eth.ContractBackend) (*types.Transaction, error) {
-			note, err := contractpkg.NewLoanNote(common.HexToAddress(contractAddress), backend)
-			if err != nil {
-				return nil, fmt.Errorf("bind loan note: %w", err)
-			}
-			return send(auth, note)
-		})
+		bindNote(contractAddress, send))
+}
+
+// bindNote adapts a LoanNote-typed send callback to the submitter's backend-typed one.
+func bindNote(
+	contractAddress string,
+	send func(*bind.TransactOpts, *contractpkg.LoanNote) (*types.Transaction, error),
+) func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error) {
+	return func(auth *bind.TransactOpts, backend eth.ContractBackend) (*types.Transaction, error) {
+		note, err := contractpkg.NewLoanNote(common.HexToAddress(contractAddress), backend)
+		if err != nil {
+			return nil, fmt.Errorf("bind loan note: %w", err)
+		}
+		return send(auth, note)
+	}
 }
 
 func (s *Service) ownerOf(ctx context.Context, loan db.Loan) (common.Address, error) {

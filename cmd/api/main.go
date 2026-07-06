@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"kaleido-project/db/sqlc"
 	"kaleido-project/internal/api"
 	"kaleido-project/internal/auth"
@@ -64,6 +66,22 @@ func run(ctx context.Context) error {
 	queries := db.New(conn)
 	lockManager := db.NewLockManager(queries)
 	lockHolder := fmt.Sprintf("%s:%d", hostname(), os.Getpid())
+	encryptor, err := keys.NewAESGCM(cfg.KeyEncryptionMasterKey)
+	if err != nil {
+		return fmt.Errorf("initialize key encryptor: %w", err)
+	}
+	identityService := identity.NewService(queries, encryptor)
+
+	poolSigners, err := identityService.EnsureServicerPool(startupCtx, cfg.ServicerKeyPoolSize)
+	if err != nil {
+		return fmt.Errorf("provision servicer key pool: %w", err)
+	}
+	poolAddresses := make([]common.Address, 0, len(poolSigners))
+	for _, signer := range poolSigners {
+		poolAddresses = append(poolAddresses, signer.Address())
+	}
+	logger.Info("servicer key pool ready", "size", len(poolSigners))
+
 	contractRepo := contracts.NewRepository(queries, conn)
 	contractService := contracts.NewService(
 		contractRepo,
@@ -71,14 +89,16 @@ func run(ctx context.Context) error {
 		lockManager,
 		cfg.LoanBaseURI,
 		lockHolder,
+		poolAddresses,
 	)
-	encryptor, err := keys.NewAESGCM(cfg.KeyEncryptionMasterKey)
-	if err != nil {
-		return fmt.Errorf("initialize key encryptor: %w", err)
-	}
-	identityService := identity.NewService(queries, encryptor)
 	loanRepo := loans.NewRepository(queries, conn)
-	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder, identityService, cfg.OIDCIssuerURL)
+	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder, identityService, cfg.OIDCIssuerURL, poolSigners)
+
+	// Heal missing pool role grants on contracts deployed before this pool existed (or under a smaller pool size).
+	// Best-effort: a down chain shouldn't block startup, and grants retry on the next boot.
+	if err := contractService.EnsureAllRoles(startupCtx); err != nil {
+		logger.Warn("pool role reconcile failed; pool writes to affected contracts will revert until re-run", "error", err)
+	}
 
 	verifier, err := auth.NewOIDCVerifier(startupCtx, auth.OIDCConfig{
 		IssuerURL: cfg.OIDCIssuerURL,
