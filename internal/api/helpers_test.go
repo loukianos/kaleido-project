@@ -9,6 +9,7 @@ import (
 
 	db "kaleido-project/db/sqlc"
 	"kaleido-project/internal/auth"
+	"kaleido-project/internal/eth"
 )
 
 // Test bearer tokens the default fake verifier accepts.
@@ -80,4 +81,16 @@ func (f fakeIdentityService) ResolveIdentity(_ context.Context, issuer, subject 
 		return db.Identity{}, errors.New("unknown test subject: " + subject)
 	}
 	return db.Identity{ID: id, Issuer: issuer, Subject: subject, Role: "lender"}, nil
+}
+
+func (f fakeIdentityService) OnboardLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error) {
+	ident, err := f.ResolveIdentity(ctx, issuer, subject)
+	if err != nil {
+		return db.Identity{}, nil, err
+	}
+	signer, err := eth.NewSigner("8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63")
+	if err != nil {
+		return db.Identity{}, nil, err
+	}
+	return ident, signer, nil
 }

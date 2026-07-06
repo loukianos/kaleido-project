@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # authenticates all actors via Keycloak, deploys a contract, warehouses + sells a loan, shows anonymous and non-owner calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance
+make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -115,11 +115,14 @@ Route policy:
 | Route | Who |
 |-------|-----|
 | `POST /admin/contracts/deploy`, `POST /admin/contracts/{id}/activate` | admin |
+| `POST /lenders/onboard` | any authenticated lender (platform service accounts are refused) |
 | `POST /loans`, `POST /loans/{id}/repayments`, `POST /loans/{id}/default` | servicer |
 | `POST /loans/{id}/transfer` | the note's owner: the holding lender under their own token, or the servicer for platform-held warehouse notes |
 | `GET` endpoints | any authenticated caller; lenders see only loans they hold |
 
-Lender identities are keyed by the token's `(iss, sub)` and created on first authenticated sight; the servicer names custodial lenders by their OIDC subject when originating.
+Lender identities are keyed by the token's `(iss, sub)`.
+`POST /lenders/onboard` is the explicit onboarding step: it creates the caller's identity, eagerly provisions their custodial wallet, and returns the subject + address the lender hands to the servicer.
+Provisioning strictly precedes participation: naming a lender by `lender_subject` or `to_subject` requires that they onboarded first (422 otherwise), so a typo'd subject can never mint a note to an identity that doesn't exist.
 
 Example token fetch against the dev realm:
 
@@ -131,7 +134,7 @@ curl -s http://localhost:8081/realms/loan-notes/protocol/openid-connect/token \
 ## Identities and custodial keys
 
 Lenders can be named two ways when originating or receiving a transfer: `lender_address`/`to_address` for an external wallet, or `lender_subject`/`to_subject` for a **custodial identity**.
-A custodial identity gets its own secp256k1 signing key, provisioned lazily the first time an operation needs its address.
+A custodial identity gets its own secp256k1 signing key, provisioned when the lender onboards (`POST /lenders/onboard`); on a network that charges gas, onboarding is where the wallet would be funded.
 The note is minted to that key's address, so the lender owns it on-chain, and API transfers of the note are signed with the lender's key — the platform key cannot move it.
 
 Key material is envelope-encrypted at rest (AES-256-GCM under `KEY_ENCRYPTION_MASTER_KEY`) and decrypted only for the duration of a request.

@@ -70,6 +70,31 @@ func (q *Queries) GetIdentityByID(ctx context.Context, id int64) (Identity, erro
 	return i, err
 }
 
+const getIdentityByIssuerSubject = `-- name: GetIdentityByIssuerSubject :one
+SELECT id, issuer, subject, role, created_at
+FROM identities
+WHERE issuer = $1
+  AND subject = $2
+`
+
+type GetIdentityByIssuerSubjectParams struct {
+	Issuer  string
+	Subject string
+}
+
+func (q *Queries) GetIdentityByIssuerSubject(ctx context.Context, arg GetIdentityByIssuerSubjectParams) (Identity, error) {
+	row := q.db.QueryRow(ctx, getIdentityByIssuerSubject, arg.Issuer, arg.Subject)
+	var i Identity
+	err := row.Scan(
+		&i.ID,
+		&i.Issuer,
+		&i.Subject,
+		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getOrCreateIdentity = `-- name: GetOrCreateIdentity :one
 INSERT INTO identities (
     issuer,
