@@ -161,21 +161,28 @@ func neverSend(t *testing.T) func(*bind.TransactOpts, eth.ContractBackend) (*typ
 	}
 }
 
+// testSignerKey is a throwaway key so the fake writer's default signer can produce real transact opts.
+const testSignerKey = "8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
+
 type fakeWriter struct {
 	backend eth.ContractBackend
 }
 
+func (f *fakeWriter) DefaultSigner() *eth.Signer {
+	signer, err := eth.NewSigner(testSignerKey)
+	if err != nil {
+		panic(err)
+	}
+	return signer
+}
+
 func (f *fakeWriter) SignerAddress() common.Address {
-	return common.HexToAddress("0x1111111111111111111111111111111111111111")
+	return f.DefaultSigner().Address()
 }
 
 func (f *fakeWriter) ChainID() *big.Int { return big.NewInt(1337) }
 
-func (f *fakeWriter) PendingNonce(context.Context) (uint64, error) { return 7, nil }
-
-func (f *fakeWriter) TransactOpts(_ context.Context, nonce uint64) (*bind.TransactOpts, error) {
-	return &bind.TransactOpts{Nonce: new(big.Int).SetUint64(nonce)}, nil
-}
+func (f *fakeWriter) PendingNonceOf(context.Context, common.Address) (uint64, error) { return 7, nil }
 
 func (f *fakeWriter) Backend() (eth.ContractBackend, error) { return f.backend, nil }
 

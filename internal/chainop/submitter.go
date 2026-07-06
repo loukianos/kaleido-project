@@ -53,16 +53,27 @@ func NewSubmitter(chain eth.Writer, locks *db.LockManager, holder string, journa
 	}
 }
 
-// Submit performs a single chain write, tracking the operation through submitted and mined.
-// Shared writer lock is released after the transaction is submitted but before the receipt is awaited.
+// Submit performs a single chain write signed by the platform's default signer, tracking the operation through submitted and mined.
 func (s *Submitter) Submit(
 	ctx context.Context,
 	opID int64,
 	action string,
 	send func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error),
 ) (string, *types.Receipt, error) {
+	return s.SubmitAs(ctx, s.chain.DefaultSigner(), opID, action, send)
+}
+
+// SubmitAs performs a single chain write signed by the given signer, tracking the operation through submitted and mined.
+// The writer lock is per signing address, so writes by different identities never contend; it is released after the transaction is submitted but before the receipt is awaited.
+func (s *Submitter) SubmitAs(
+	ctx context.Context,
+	signer *eth.Signer,
+	opID int64,
+	action string,
+	send func(*bind.TransactOpts, eth.ContractBackend) (*types.Transaction, error),
+) (string, *types.Receipt, error) {
 	holder := fmt.Sprintf("%s#%d", s.holder, holderSeq.Add(1))
-	release, err := s.locks.Acquire(ctx, eth.LockName(s.chain), holder, lockTTL)
+	release, err := s.locks.Acquire(ctx, eth.LockNameFor(s.chain.ChainID(), signer.Address()), holder, lockTTL)
 	if err != nil {
 		return "", nil, s.Retryable(ctx, opID, err)
 	}
@@ -73,11 +84,11 @@ func (s *Submitter) Submit(
 		return "", nil, s.Retryable(ctx, opID, err)
 	}
 
-	nonce, err := s.chain.PendingNonce(ctx)
+	nonce, err := s.chain.PendingNonceOf(ctx, signer.Address())
 	if err != nil {
 		return "", nil, s.Retryable(ctx, opID, err)
 	}
-	auth, err := s.chain.TransactOpts(ctx, nonce)
+	auth, err := signer.TransactOpts(ctx, s.chain.ChainID(), nonce)
 	if err != nil {
 		return "", nil, s.Retryable(ctx, opID, err)
 	}

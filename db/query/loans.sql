@@ -2,6 +2,7 @@
 INSERT INTO loans (
     borrower_ref,
     lender_address,
+    lender_identity_id,
     principal_minor,
     apr_bps,
     term_days,
@@ -12,7 +13,7 @@ INSERT INTO loans (
     mint_operation_id,
     contract_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
 RETURNING *;
 
@@ -57,6 +58,7 @@ RETURNING *;
 -- name: UpdateLoanLender :one
 UPDATE loans
 SET lender_address = $2,
+    lender_identity_id = $3,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

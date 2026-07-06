@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # deploys a contract, warehouses + sells a loan, repays it, shows the platform can't move a lender-owned note, defaults it, originates a loan on a second contract instance
+make demo # deploys a contract, warehouses + sells a loan, shows the platform can't move a lender-owned note, moves a note between custodial lenders signed by their own keys, originates a loan on a second contract instance
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -54,7 +54,8 @@ Authorization uses OpenZeppelin `AccessControl` rather than a single owner:
 There is deliberately no admin transfer path.
 Notes move only through standard owner-signed ERC-721 transfers, so the platform provably cannot reassign a lender's claim.
 The one exception is settlement, which burns the note regardless of holder because final repayment extinguishes the claim.
-Until per-identity signing keys land, the API signs everything with the platform key, so the transfer endpoint only succeeds for notes the platform itself holds (warehouse originations to its own address) and returns 409 otherwise.
+Transfers are signed by whoever holds the note: a custodial lender's key when the platform custodies it, or the platform key for warehouse originations to its own address.
+Externally held notes can't be moved by the API at all (409); their owners transfer on-chain directly.
 
 Any number of contract instances can be deployed per chain; each instance is its own loan series (for example per originator or per vintage).
 At most one contract is *active* — the default series for new originations — and `POST /loans` accepts a `contract_id` to originate into a specific series instead.
@@ -89,12 +90,24 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `DATABASE_URL`         | local Postgres                      | Postgres connection string                |
 | `LOAN_BASE_URI`        | local API loans URI                 | Base URI used to build loan metadata URIs |
 | `DEPLOYER_PRIVATE_KEY` | throwaway dev key                   | In-app transaction signer key             |
+| `KEY_ENCRYPTION_MASTER_KEY` | throwaway dev key              | AES-256 master key encrypting custodial signing keys at rest |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
-Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock keyed by chain id and signer address.
+Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock keyed by chain id and signing address.
 That keeps multiple API instances from submitting transactions with the same nonce while leaving the runtime itself stateless.
-Nonce management is kind of tricky and could be mitigated by using one deployer key per API instance.
+Because the lock is per key, custodial identities' writes never contend with each other or with the platform key; the remaining serialization point is platform-signed operations, which a pool of servicer keys could shard further.
+
+## Identities and custodial keys
+
+Lenders can be named two ways when originating or receiving a transfer: `lender_address`/`to_address` for an external wallet, or `lender_subject`/`to_subject` for a **custodial identity**.
+A custodial identity gets its own secp256k1 signing key, provisioned lazily the first time an operation needs its address.
+The note is minted to that key's address, so the lender owns it on-chain, and API transfers of the note are signed with the lender's key — the platform key cannot move it.
+
+Key material is envelope-encrypted at rest (AES-256-GCM under `KEY_ENCRYPTION_MASTER_KEY`) and decrypted only for the duration of a request.
+The `signing_keys` schema records the encryption scheme and key version per row, so a cloud KMS implementation can slot in behind the same `keys.Encryptor` interface without a migration.
+
+Chain writes take a DB-backed writer lock named by chain id and signing address, so writes by different identities never contend; only same-key writes serialize.
 
 ## Database
 

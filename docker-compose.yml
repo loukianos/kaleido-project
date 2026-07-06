@@ -12,6 +12,7 @@ services:
       DATABASE_URL: "${DATABASE_URL:-postgres://loan_notes:loan_notes@postgres:5432/loan_notes?sslmode=disable}"
       LOAN_BASE_URI: "${LOAN_BASE_URI:-http://localhost:8080/loans/}"
       DEPLOYER_PRIVATE_KEY: "${DEPLOYER_PRIVATE_KEY:-0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63}"
+      KEY_ENCRYPTION_MASTER_KEY: "${KEY_ENCRYPTION_MASTER_KEY:-6a006ea1d0bfd421d93890dfe78ec0fb16e74a9818e5a097a5d5cc0f62693051}"
     depends_on:
       postgres:
         condition: service_healthy

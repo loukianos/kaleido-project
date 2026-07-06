@@ -32,20 +32,21 @@ type ContractBackend interface {
 	bind.DeployBackend
 }
 
+// Writer is the shared chain connection.
+// Signing is per-request: callers pass a Signer (the platform's DefaultSigner or a custodial identity's) to the submitter.
 type Writer interface {
 	SignerAddress() common.Address
+	DefaultSigner() *Signer
 	ChainID() *big.Int
-	PendingNonce(context.Context) (uint64, error)
-	TransactOpts(context.Context, uint64) (*bind.TransactOpts, error)
+	PendingNonceOf(context.Context, common.Address) (uint64, error)
 	Backend() (ContractBackend, error)
 }
 
 type Client struct {
-	rpc           RPCClient
-	backend       ContractBackend
-	privateKey    *ecdsa.PrivateKey
-	signerAddress common.Address
-	chainID       *big.Int
+	rpc     RPCClient
+	backend ContractBackend
+	signer  *Signer
+	chainID *big.Int
 }
 
 func Dial(ctx context.Context, rpcURL string, chainID int64, privateKeyHex string) (*Client, error) {
@@ -74,16 +75,15 @@ func New(rpc RPCClient, chainID int64, privateKeyHex string) (*Client, error) {
 		return nil, fmt.Errorf("chain id must be positive, got %d", chainID)
 	}
 
-	privateKey, err := ParsePrivateKey(privateKeyHex)
+	signer, err := NewSigner(privateKeyHex)
 	if err != nil {
 		return nil, err
 	}
 
 	client := &Client{
-		rpc:           rpc,
-		privateKey:    privateKey,
-		signerAddress: crypto.PubkeyToAddress(privateKey.PublicKey),
-		chainID:       big.NewInt(chainID),
+		rpc:     rpc,
+		signer:  signer,
+		chainID: big.NewInt(chainID),
 	}
 	if backend, ok := rpc.(ContractBackend); ok {
 		client.backend = backend
@@ -91,8 +91,14 @@ func New(rpc RPCClient, chainID int64, privateKeyHex string) (*Client, error) {
 	return client, nil
 }
 
+// SignerAddress is the platform default signer's address.
 func (c *Client) SignerAddress() common.Address {
-	return c.signerAddress
+	return c.signer.Address()
+}
+
+// DefaultSigner is the platform key, used for servicer-side writes (deploy, originate, settle, default).
+func (c *Client) DefaultSigner() *Signer {
+	return c.signer
 }
 
 func (c *Client) ChainID() *big.Int {
@@ -104,17 +110,6 @@ func (c *Client) Backend() (ContractBackend, error) {
 		return nil, errors.New("ethereum contract backend is unavailable")
 	}
 	return c.backend, nil
-}
-
-func (c *Client) TransactOpts(ctx context.Context, nonce uint64) (*bind.TransactOpts, error) {
-	opts, err := bind.NewKeyedTransactorWithChainID(c.privateKey, c.chainID)
-	if err != nil {
-		return nil, fmt.Errorf("create transaction signer: %w", err)
-	}
-	opts.Context = ctx
-	opts.Nonce = new(big.Int).SetUint64(nonce)
-	opts.GasPrice = big.NewInt(0)
-	return opts, nil
 }
 
 func (c *Client) Check(ctx context.Context) error {
@@ -134,8 +129,8 @@ func (c *Client) CheckChainID(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) PendingNonce(ctx context.Context) (uint64, error) {
-	nonce, err := c.rpc.PendingNonceAt(ctx, c.signerAddress)
+func (c *Client) PendingNonceOf(ctx context.Context, address common.Address) (uint64, error) {
+	nonce, err := c.rpc.PendingNonceAt(ctx, address)
 	if err != nil {
 		return 0, fmt.Errorf("get pending nonce: %w", err)
 	}
@@ -143,12 +138,7 @@ func (c *Client) PendingNonce(ctx context.Context) (uint64, error) {
 }
 
 func (c *Client) SignTransaction(tx *types.Transaction) (*types.Transaction, error) {
-	signer := types.LatestSignerForChainID(c.chainID)
-	signed, err := types.SignTx(tx, signer, c.privateKey)
-	if err != nil {
-		return nil, fmt.Errorf("sign transaction: %w", err)
-	}
-	return signed, nil
+	return c.signer.SignTx(c.chainID, tx)
 }
 
 func (c *Client) SendSignedTransaction(ctx context.Context, tx *types.Transaction) error {
@@ -184,6 +174,8 @@ func ParsePrivateKey(hexKey string) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-func LockName(w Writer) string {
-	return fmt.Sprintf("ethereum-writer:%s:%s", w.ChainID(), w.SignerAddress().Hex())
+// LockNameFor names the writer lock serializing nonce use for one signing address.
+// Locks are per key, so different identities' transactions never contend.
+func LockNameFor(chainID *big.Int, address common.Address) string {
+	return fmt.Sprintf("ethereum-writer:%s:%s", chainID, address.Hex())
 }

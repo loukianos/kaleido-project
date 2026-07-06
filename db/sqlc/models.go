@@ -40,6 +40,14 @@ type Contract struct {
 	UpdatedAt    time.Time
 }
 
+type Identity struct {
+	ID        int64
+	Issuer    string
+	Subject   string
+	Role      string
+	CreatedAt time.Time
+}
+
 type Loan struct {
 	ID               int64
 	TokenID          *string
@@ -56,6 +64,7 @@ type Loan struct {
 	MintOperationID  *int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	LenderIdentityID *int64
 }
 
 type Repayment struct {
@@ -64,4 +73,14 @@ type Repayment struct {
 	AmountMinor int64
 	ExternalRef *string
 	CreatedAt   time.Time
+}
+
+type SigningKey struct {
+	ID         int64
+	IdentityID int64
+	Address    string
+	Ciphertext []byte
+	Encryptor  string
+	KeyVersion int32
+	CreatedAt  time.Time
 }

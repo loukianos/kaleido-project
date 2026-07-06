@@ -68,7 +68,7 @@ func TestPendingNonce(t *testing.T) {
 	client, err := New(rpc, 1337, devPrivateKey)
 	require.NoError(t, err)
 
-	nonce, err := client.PendingNonce(context.Background())
+	nonce, err := client.PendingNonceOf(context.Background(), client.SignerAddress())
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), nonce)
 	require.Equal(t, client.SignerAddress(), rpc.nonceAddress)

@@ -683,6 +683,10 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "lender_address": {
+                    "description": "Exactly one of lender_address (external wallet) and lender_subject (custodial identity) is required.",
+                    "type": "string"
+                },
+                "lender_subject": {
                     "type": "string"
                 },
                 "principal_minor": {
@@ -752,6 +756,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "lender_address": {
+                    "type": "string"
+                },
+                "lender_subject": {
                     "type": "string"
                 },
                 "operation_id": {
@@ -903,6 +910,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "to_address": {
+                    "description": "Exactly one of to_address (external wallet) and to_subject (custodial identity) is required.",
+                    "type": "string"
+                },
+                "to_subject": {
                     "type": "string"
                 }
             }

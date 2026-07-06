@@ -132,6 +132,90 @@ func TestCreateLoanValidation(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
+func TestCreateLoanWithLenderSubject(t *testing.T) {
+	service := &fakeLoansService{
+		result: loans.OriginateResult{
+			Loan: db.Loan{
+				ID:               9,
+				TokenID:          db.Ptr("0"),
+				BorrowerRef:      "borrower-1",
+				LenderAddress:    "0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73",
+				LenderIdentityID: db.Ptr(int64(1)),
+				Status:           "active",
+			},
+			LenderSubject: "alice",
+		},
+	}
+	handler := newTestHandler(Options{Loans: service})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{
+		"borrower_ref":"borrower-1",
+		"lender_subject":"alice",
+		"principal_minor":10000,
+		"apr_bps":800,
+		"term_days":365
+	}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	require.Equal(t, "alice", service.request.LenderSubject)
+	require.Empty(t, service.request.LenderAddress)
+
+	var body loanResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, "alice", body.LenderSubject)
+}
+
+func TestCreateLoanLenderExclusivity(t *testing.T) {
+	handler := newTestHandler(Options{
+		Loans: &fakeLoansService{err: loans.ErrInvalidLender},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{
+		"borrower_ref":"borrower-1",
+		"lender_address":"0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73",
+		"lender_subject":"alice",
+		"principal_minor":10000,
+		"apr_bps":800,
+		"term_days":365
+	}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestTransferLoanToSubject(t *testing.T) {
+	service := &fakeLoansService{
+		transferResult: loans.TransferResult{
+			Loan: db.Loan{
+				ID:               7,
+				TokenID:          db.Ptr("0"),
+				BorrowerRef:      "borrower-1",
+				LenderAddress:    "0x9999999999999999999999999999999999999999",
+				LenderIdentityID: db.Ptr(int64(2)),
+				Status:           "active",
+			},
+			LenderSubject: "bob",
+			OperationID:   13,
+			TxHash:        "0xtransfer",
+		},
+	}
+	handler := newTestHandler(Options{Loans: service})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{"to_subject":"bob"}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "bob", service.transferRequest.ToSubject)
+
+	var body loanResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, "bob", body.LenderSubject)
+}
+
 func TestCreateLoanDomainError(t *testing.T) {
 	handler := newTestHandler(Options{
 		Loans: &fakeLoansService{err: loans.ErrInvalidAmount},
