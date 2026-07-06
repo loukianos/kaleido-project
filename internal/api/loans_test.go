@@ -344,6 +344,26 @@ func TestTransferLoanConflict(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
 
+func TestTransferLoanNotNoteOwner(t *testing.T) {
+	handler := newTestHandler(Options{
+		Loans: &fakeLoansService{
+			transferErr: fmt.Errorf("%w: note is held by 0x2222222222222222222222222222222222222222", loans.ErrNotNoteOwner),
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{
+		"to_address":"0x1111111111111111111111111111111111111111"
+	}`))
+	handler.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+
+	var body errorResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Contains(t, body.Error, "note is held by")
+}
+
 func TestDefaultLoan(t *testing.T) {
 	service := &fakeLoansService{
 		defaultResult: loans.DefaultResult{

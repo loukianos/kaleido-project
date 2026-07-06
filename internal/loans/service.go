@@ -30,6 +30,7 @@ var (
 	ErrInvalidAddress             = errors.New("invalid ethereum address")
 	ErrLoanNotActive              = errors.New("loan is not active")
 	ErrLoanNotTransferable        = errors.New("loan is not transferable")
+	ErrNotNoteOwner               = errors.New("transfer requires the note owner's signature")
 	ErrLoanMissingToken           = errors.New("loan is missing token id")
 	ErrLoanMissingContract        = errors.New("loan is missing contract")
 	ErrLoanOriginatedEventMissing = errors.New("loan originated event missing from receipt")
@@ -277,6 +278,16 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 		return TransferResult{}, err
 	}
 
+	// Transfers are owner-signed ERC-721 transferFrom: the contract has no admin path to move a note.
+	// Until per-identity lender keys exist, the platform key is the only signer, so the API can only transfer notes the platform itself holds (e.g. warehouse originations to its own address).
+	owner, err := s.ownerOf(ctx, loan)
+	if err != nil {
+		return TransferResult{}, err
+	}
+	if owner != s.chain.SignerAddress() {
+		return TransferResult{}, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+	}
+
 	op, err := s.repo.CreateLoanOperation(ctx, transferOperationKind, contract.ID, loan.ID)
 	if err != nil {
 		return TransferResult{}, fmt.Errorf("create transfer operation: %w", err)
@@ -288,7 +299,7 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	}
 	txHash, _, err := s.submitOperation(ctx, op.ID, contract.Address, "transfer",
 		func(auth *bind.TransactOpts, note *contractpkg.LoanNote) (*types.Transaction, error) {
-			return note.AdminTransfer(auth, tokenID, to)
+			return note.SafeTransferFrom(auth, owner, to, tokenID)
 		})
 	if err != nil {
 		return TransferResult{}, err

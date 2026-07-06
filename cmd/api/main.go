@@ -85,8 +85,9 @@ func run(ctx context.Context) error {
 					Check: ethClient.Check,
 				},
 			},
-			Contracts: contractService,
-			Loans:     loanService,
+			Contracts:     contractService,
+			Loans:         loanService,
+			SignerAddress: ethClient.SignerAddress().Hex(),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

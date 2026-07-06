@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -38,6 +39,19 @@ func run() error {
 		return err
 	}
 
+	// The platform signer address doubles as the custody address for warehouse originations.
+	fmt.Println("Reading service info")
+	var info struct {
+		SignerAddress string `json:"signer_address"`
+	}
+	if err := api.get("/", &info); err != nil {
+		return err
+	}
+	// The lender must be a distinct party or the refused-transfer demonstration below would succeed.
+	if strings.EqualFold(lender, info.SignerAddress) {
+		return fmt.Errorf("LENDER_ADDRESS %s is the platform signer; set it to a different address", lender)
+	}
+
 	// Deploy is skipped when a contract already exists (e.g. on demo re-runs)
 	if err := api.get("/contracts/active", nil); err != nil {
 		fmt.Println("Deploying active LoanNote contract")
@@ -48,14 +62,15 @@ func run() error {
 		fmt.Println("Reusing existing LoanNote contract")
 	}
 
-	fmt.Println("Originating loan note")
+	// Warehouse flow: the note is originated into platform custody, then sold to a lender with an owner-signed transfer.
+	fmt.Println("Originating warehouse loan note (lender = platform signer)")
 	var loan struct {
 		ID            int64 `json:"id"`
 		TotalDueMinor int64 `json:"total_due_minor"`
 	}
 	err := api.post("/loans", map[string]any{
 		"borrower_ref":    fmt.Sprintf("demo-%d", time.Now().Unix()),
-		"lender_address":  lender,
+		"lender_address":  info.SignerAddress,
 		"principal_minor": 10000,
 		"apr_bps":         0,
 		"term_days":       30,
@@ -64,8 +79,8 @@ func run() error {
 		return err
 	}
 
-	fmt.Printf("Transferring loan %d\n", loan.ID)
-	if err := api.post(fmt.Sprintf("/loans/%d/transfer", loan.ID), map[string]any{"to_address": newLender}, nil); err != nil {
+	fmt.Printf("Transferring warehoused loan %d to lender\n", loan.ID)
+	if err := api.post(fmt.Sprintf("/loans/%d/transfer", loan.ID), map[string]any{"to_address": lender}, nil); err != nil {
 		return err
 	}
 
@@ -83,7 +98,8 @@ func run() error {
 		return err
 	}
 
-	fmt.Println("Originating loan note for default flow")
+	// Lender-owned flow: the note is minted straight to the lender, so the platform provably cannot move it.
+	fmt.Println("Originating lender-owned loan note for default flow")
 	var defaultLoan struct {
 		ID int64 `json:"id"`
 	}
@@ -96,6 +112,13 @@ func run() error {
 	}, &defaultLoan)
 	if err != nil {
 		return err
+	}
+
+	fmt.Printf("Attempting platform transfer of lender-owned loan %d (expected to be refused)\n", defaultLoan.ID)
+	if err := api.post(fmt.Sprintf("/loans/%d/transfer", defaultLoan.ID), map[string]any{"to_address": newLender}, nil); err == nil {
+		return errors.New("transfer of a lender-owned note should have been refused")
+	} else {
+		fmt.Println("Refused as designed:", err)
 	}
 
 	fmt.Printf("Marking loan %d defaulted\n", defaultLoan.ID)
