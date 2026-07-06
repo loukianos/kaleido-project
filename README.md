@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # deploys a contract, warehouses + sells a loan, repays it, shows the platform can't move a lender-owned note, defaults it
+make demo # deploys a contract, warehouses + sells a loan, repays it, shows the platform can't move a lender-owned note, defaults it, originates a loan on a second contract instance
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -55,6 +55,10 @@ There is deliberately no admin transfer path.
 Notes move only through standard owner-signed ERC-721 transfers, so the platform provably cannot reassign a lender's claim.
 The one exception is settlement, which burns the note regardless of holder because final repayment extinguishes the claim.
 Until per-identity signing keys land, the API signs everything with the platform key, so the transfer endpoint only succeeds for notes the platform itself holds (warehouse originations to its own address) and returns 409 otherwise.
+
+Any number of contract instances can be deployed per chain; each instance is its own loan series (for example per originator or per vintage).
+At most one contract is *active* — the default series for new originations — and `POST /loans` accepts a `contract_id` to originate into a specific series instead.
+The chain's first contract becomes active automatically; later deploys take over the default only when the deploy request sets `activate`, and `POST /admin/contracts/{id}/activate` switches the default at any time.
 
 ```bash
 make contracts-install # npm install

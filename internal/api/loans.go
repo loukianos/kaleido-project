@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	db "kaleido-project/db/sqlc"
+	contractspkg "kaleido-project/internal/contracts"
 	"kaleido-project/internal/loans"
 )
 
@@ -32,6 +33,8 @@ type createLoanRequest struct {
 	PrincipalMinor int64  `json:"principal_minor"`
 	APRBps         uint16 `json:"apr_bps"`
 	TermDays       int64  `json:"term_days"`
+	// ContractID selects the loan series to originate into; omit it to use the chain's active contract.
+	ContractID *int64 `json:"contract_id,omitempty"`
 }
 
 // handleCreateLoan originates a loan and mints its note on chain.
@@ -64,6 +67,7 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 			PrincipalMinor: req.PrincipalMinor,
 			APRBps:         req.APRBps,
 			TermDays:       req.TermDays,
+			ContractID:     req.ContractID,
 		})
 		if err != nil {
 			if writeLoanError(c, err) {
@@ -373,6 +377,7 @@ func handleListRepayments(logger *slog.Logger, service LoansService) gin.Handler
 type loanResponse struct {
 	ID               int64  `json:"id"`
 	TokenID          string `json:"token_id,omitempty"`
+	ContractID       int64  `json:"contract_id,omitempty"`
 	BorrowerRef      string `json:"borrower_ref"`
 	LenderAddress    string `json:"lender_address"`
 	PrincipalMinor   int64  `json:"principal_minor"`
@@ -433,6 +438,7 @@ func loanResponseFromLoan(loan db.Loan) loanResponse {
 	return loanResponse{
 		ID:               loan.ID,
 		TokenID:          stringFromNull(loan.TokenID),
+		ContractID:       int64FromNull(loan.ContractID),
 		BorrowerRef:      loan.BorrowerRef,
 		LenderAddress:    loan.LenderAddress,
 		PrincipalMinor:   loan.PrincipalMinor,
@@ -443,6 +449,13 @@ func loanResponseFromLoan(loan db.Loan) loanResponse {
 		OutstandingMinor: loan.OutstandingMinor,
 		Status:           loan.Status,
 	}
+}
+
+func int64FromNull(value *int64) int64 {
+	if value != nil {
+		return *value
+	}
+	return 0
 }
 
 func stringFromNull(value *string) string {
@@ -484,6 +497,7 @@ func writeLoanError(c *gin.Context, err error) bool {
 		errors.Is(err, loans.ErrLoanMissingToken),
 		errors.Is(err, loans.ErrLoanMissingContract),
 		errors.Is(err, loans.ErrNoActiveContract),
+		errors.Is(err, contractspkg.ErrContractNotFound),
 		errors.Is(err, loans.ErrDuplicateExternalRef):
 		c.JSON(http.StatusConflict, errorBody(err.Error()))
 	case errors.Is(err, db.ErrLockBusy):

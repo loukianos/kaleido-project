@@ -131,6 +131,40 @@ func run() error {
 		return err
 	}
 
+	// Each contract instance is its own loan series; originations select one by contract_id.
+	fmt.Println("Deploying a second loan series (non-default contract)")
+	var series struct {
+		ID int64 `json:"id"`
+	}
+	if err := api.post("/admin/contracts/deploy", map[string]any{}, &series); err != nil {
+		return err
+	}
+
+	fmt.Printf("Originating lender-owned loan note on series %d\n", series.ID)
+	var seriesLoan struct {
+		ID         int64 `json:"id"`
+		ContractID int64 `json:"contract_id"`
+	}
+	err = api.post("/loans", map[string]any{
+		"borrower_ref":    fmt.Sprintf("demo-series-%d", time.Now().Unix()),
+		"lender_address":  lender,
+		"principal_minor": 5000,
+		"apr_bps":         250,
+		"term_days":       90,
+		"contract_id":     series.ID,
+	}, &seriesLoan)
+	if err != nil {
+		return err
+	}
+	if seriesLoan.ContractID != series.ID {
+		return fmt.Errorf("series loan minted on contract %d, want %d", seriesLoan.ContractID, series.ID)
+	}
+
+	fmt.Println("Listing contracts")
+	if err := api.get("/contracts", nil); err != nil {
+		return err
+	}
+
 	fmt.Println("Reading all loans")
 	if err := api.get("/loans?limit=100", nil); err != nil {
 		return err
