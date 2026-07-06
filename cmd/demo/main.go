@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"cmp"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,20 +72,28 @@ func run() error {
 		return fmt.Errorf("bob login: %w", err)
 	}
 
-	// Custodial identities are keyed by the OIDC subject, so the servicer names lenders by the sub claim in their tokens.
-	aliceSub, err := subjectOf(aliceToken)
-	if err != nil {
-		return err
-	}
-	bobSub, err := subjectOf(bobToken)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("alice sub=%s bob sub=%s\n", aliceSub, bobSub)
-
 	servicer := client{baseURL: apiURL, http: httpClient, token: servicerToken}
 	alice := client{baseURL: apiURL, http: httpClient, token: aliceToken}
 	bob := client{baseURL: apiURL, http: httpClient, token: bobToken}
+
+	// Onboarding is the explicit provisioning step: it creates the lender identity and custodial wallet, and returns the subject + address the lender hands to the servicer.
+	fmt.Println("Onboarding alice as a custodial lender")
+	var aliceAccount struct {
+		Subject string `json:"subject"`
+		Address string `json:"address"`
+	}
+	if err := alice.post("/lenders/onboard", nil, &aliceAccount); err != nil {
+		return err
+	}
+	fmt.Println("Onboarding bob as a custodial lender")
+	var bobAccount struct {
+		Subject string `json:"subject"`
+		Address string `json:"address"`
+	}
+	if err := bob.post("/lenders/onboard", nil, &bobAccount); err != nil {
+		return err
+	}
+	aliceSub, bobSub := aliceAccount.Subject, bobAccount.Subject
 
 	// The API refuses anonymous callers outright.
 	fmt.Println("Verifying anonymous requests are rejected")
@@ -188,7 +195,21 @@ func run() error {
 		return err
 	}
 
-	// Custodial lenders: the note is minted to a per-identity key provisioned on first sight, and transfers are signed by the owning lender's key under their own token.
+	// Provisioning strictly precedes participation: naming a lender who never onboarded is refused.
+	fmt.Println("Attempting origination to a never-onboarded lender (expected to be refused)")
+	err = servicer.post("/loans", map[string]any{
+		"borrower_ref":    fmt.Sprintf("demo-unknown-%d", time.Now().Unix()),
+		"lender_subject":  "never-onboarded",
+		"principal_minor": 1000,
+		"apr_bps":         0,
+		"term_days":       30,
+	}, nil)
+	if err == nil {
+		return errors.New("origination to a never-onboarded lender should have been refused")
+	}
+	fmt.Println("Refused as designed:", err)
+
+	// Custodial lenders: the note is minted to the wallet provisioned at onboarding, and transfers are signed by the owning lender's key under their own token.
 	fmt.Println("Originating loan note for custodial lender alice")
 	var custodialLoan struct {
 		ID            int64  `json:"id"`
@@ -208,6 +229,9 @@ func run() error {
 	}
 	if custodialLoan.LenderSubject != aliceSub {
 		return fmt.Errorf("custodial loan lender subject is %q, want %q", custodialLoan.LenderSubject, aliceSub)
+	}
+	if !strings.EqualFold(custodialLoan.LenderAddress, aliceAccount.Address) {
+		return fmt.Errorf("note minted to %s, want alice's onboarded wallet %s", custodialLoan.LenderAddress, aliceAccount.Address)
 	}
 	if strings.EqualFold(custodialLoan.LenderAddress, info.SignerAddress) {
 		return errors.New("alice's custodial address must differ from the platform signer")
@@ -338,28 +362,6 @@ func fetchToken(httpClient *http.Client, tokenURL string, form url.Values) (stri
 		return "", errors.New("token response missing access_token")
 	}
 	return payload.AccessToken, nil
-}
-
-// subjectOf reads the sub claim out of a JWT without verifying it; the demo only needs the identifier, the API does the verification.
-func subjectOf(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", errors.New("token is not a JWT")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", fmt.Errorf("decode token payload: %w", err)
-	}
-	var claims struct {
-		Sub string `json:"sub"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("parse token claims: %w", err)
-	}
-	if claims.Sub == "" {
-		return "", errors.New("token missing sub claim")
-	}
-	return claims.Sub, nil
 }
 
 type client struct {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	db "kaleido-project/db/sqlc"
+	"kaleido-project/internal/identity"
 	"kaleido-project/internal/loans"
 )
 
@@ -163,6 +165,61 @@ func TestTransferPassesLenderCaller(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.False(t, service.transferCaller.Servicer)
 	require.Equal(t, aliceIdentityID, service.transferCaller.IdentityID)
+}
+
+func TestOnboardLender(t *testing.T) {
+	handler := newTestHandler(Options{})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, asAlice(httptest.NewRequest(http.MethodPost, "/lenders/onboard", nil)))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var body onboardResponse
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
+	require.Equal(t, "alice", body.Subject)
+	require.Equal(t, testIssuer, body.Issuer)
+	require.NotEmpty(t, body.Address)
+}
+
+func TestOnboardRejectsPlatformAccounts(t *testing.T) {
+	handler := newTestHandler(Options{})
+
+	for name, wrap := range map[string]func(*http.Request) *http.Request{
+		"servicer": asServicer,
+		"admin":    asAdmin,
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, wrap(httptest.NewRequest(http.MethodPost, "/lenders/onboard", nil)))
+		require.Equal(t, http.StatusForbidden, recorder.Code, name)
+	}
+}
+
+func TestOnboardRequiresToken(t *testing.T) {
+	handler := newTestHandler(Options{})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/lenders/onboard", nil))
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestCreateLoanLenderNotOnboarded(t *testing.T) {
+	handler := newTestHandler(Options{
+		Loans: &fakeLoansService{err: fmt.Errorf("resolve lender identity: %w", identity.ErrNotOnboarded)},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{
+		"borrower_ref":"borrower-1",
+		"lender_subject":"never-onboarded",
+		"principal_minor":10000,
+		"apr_bps":800,
+		"term_days":365
+	}`))
+	handler.ServeHTTP(recorder, asServicer(request))
+
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
 }
 
 func TestTransferPassesServicerCaller(t *testing.T) {
