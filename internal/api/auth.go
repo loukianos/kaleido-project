@@ -10,12 +10,14 @@ import (
 
 	db "kaleido-project/db/sqlc"
 	"kaleido-project/internal/auth"
+	"kaleido-project/internal/eth"
 	"kaleido-project/internal/loans"
 )
 
 // IdentityService resolves authenticated principals to lender identities; identity.Service satisfies it.
 type IdentityService interface {
 	ResolveIdentity(ctx context.Context, issuer, subject string) (db.Identity, error)
+	OnboardLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error)
 }
 
 const principalContextKey = "auth.principal"

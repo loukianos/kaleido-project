@@ -41,8 +41,9 @@ var (
 )
 
 // IdentityResolver maps subjects to custodial identities and signing keys; identity.Service satisfies it.
+// LenderAddress is lookup-only: subjects named in request bodies must already be onboarded, so the loans domain can never fabricate identities.
 type IdentityResolver interface {
-	ResolveLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error)
+	LenderAddress(ctx context.Context, issuer, subject string) (db.Identity, common.Address, error)
 	SignerForIdentity(ctx context.Context, identityID int64) (*eth.Signer, error)
 	Identity(ctx context.Context, id int64) (db.Identity, error)
 }
@@ -224,11 +225,11 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 	case req.LenderSubject != "" && req.LenderAddress != "", req.LenderSubject == "" && req.LenderAddress == "":
 		return OriginateResult{}, ErrInvalidLender
 	case req.LenderSubject != "":
-		ident, signer, err := s.identities.ResolveLender(ctx, s.issuer, req.LenderSubject)
+		ident, address, err := s.identities.LenderAddress(ctx, s.issuer, req.LenderSubject)
 		if err != nil {
 			return OriginateResult{}, fmt.Errorf("resolve lender identity: %w", err)
 		}
-		lender = signer.Address()
+		lender = address
 		lenderIdentityID = db.Ptr(ident.ID)
 		lenderSubject = ident.Subject
 	default:
@@ -350,11 +351,11 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	case req.ToSubject != "" && req.ToAddress != "", req.ToSubject == "" && req.ToAddress == "":
 		return TransferResult{}, ErrInvalidTransferTarget
 	case req.ToSubject != "":
-		ident, signer, err := s.identities.ResolveLender(ctx, s.issuer, req.ToSubject)
+		ident, address, err := s.identities.LenderAddress(ctx, s.issuer, req.ToSubject)
 		if err != nil {
 			return TransferResult{}, fmt.Errorf("resolve transfer target identity: %w", err)
 		}
-		to = signer.Address()
+		to = address
 		toIdentityID = db.Ptr(ident.ID)
 		toSubject = ident.Subject
 	default:

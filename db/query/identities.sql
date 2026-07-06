@@ -14,6 +14,12 @@ SELECT *
 FROM identities
 WHERE id = $1;
 
+-- name: GetIdentityByIssuerSubject :one
+SELECT *
+FROM identities
+WHERE issuer = $1
+  AND subject = $2;
+
 -- name: CreateSigningKey :one
 INSERT INTO signing_keys (
     identity_id,

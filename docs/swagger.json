@@ -240,6 +240,37 @@
                 }
             }
         },
+        "/lenders/onboard": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates the caller's lender identity and eagerly provisions their custodial wallet. Idempotent: an already-onboarded lender gets their existing identity back. A lender must onboard before they can be named as lender_subject or to_subject.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "lenders"
+                ],
+                "summary": "Onboard as a lender",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.onboardResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Platform service accounts do not onboard as lenders",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/loans": {
             "get": {
                 "security": [
@@ -861,6 +892,22 @@
                     "items": {
                         "$ref": "#/definitions/api.loanResponse"
                     }
+                }
+            }
+        },
+        "api.onboardResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "example": "0x1C7021cc3fAa237D4B837268dc19c12B6003D449"
+                },
+                "issuer": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string",
+                    "example": "080dfd67-ccc1-49c1-8a30-c292b3a4a7cf"
                 }
             }
         },

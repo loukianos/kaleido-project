@@ -28,10 +28,10 @@ func newTestService(t *testing.T) (*Service, *fakeStore) {
 	return NewService(store, encryptor), store
 }
 
-func TestResolveLenderProvisionsOnFirstSight(t *testing.T) {
+func TestOnboardLenderProvisionsOnFirstSight(t *testing.T) {
 	service, store := newTestService(t)
 
-	ident, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	ident, signer, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	require.Equal(t, "alice", ident.Subject)
 	require.Equal(t, testIssuerURL, ident.Issuer)
@@ -45,25 +45,25 @@ func TestResolveLenderProvisionsOnFirstSight(t *testing.T) {
 	require.NotContains(t, string(row.Ciphertext), signer.Address().Hex())
 }
 
-func TestResolveLenderReusesExistingKey(t *testing.T) {
+func TestOnboardLenderReusesExistingKey(t *testing.T) {
 	service, _ := newTestService(t)
 
-	_, first, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	_, first, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
-	_, second, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	_, second, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	require.Equal(t, first.Address(), second.Address())
 
-	_, other, err := service.ResolveLender(context.Background(), testIssuerURL, "bob")
+	_, other, err := service.OnboardLender(context.Background(), testIssuerURL, "bob")
 	require.NoError(t, err)
 	require.NotEqual(t, first.Address(), other.Address())
 }
 
-func TestResolveLenderRejectsEmptySubject(t *testing.T) {
+func TestOnboardLenderRejectsEmptySubject(t *testing.T) {
 	service, _ := newTestService(t)
-	_, _, err := service.ResolveLender(context.Background(), testIssuerURL, "")
+	_, _, err := service.OnboardLender(context.Background(), testIssuerURL, "")
 	require.ErrorIs(t, err, ErrInvalidSubject)
-	_, _, err = service.ResolveLender(context.Background(), "", "alice")
+	_, _, err = service.OnboardLender(context.Background(), "", "alice")
 	require.ErrorIs(t, err, ErrInvalidSubject)
 }
 
@@ -81,7 +81,7 @@ func TestResolveIdentityDoesNotProvisionKey(t *testing.T) {
 func TestSignerForIdentityReturnsProvisionedKey(t *testing.T) {
 	service, _ := newTestService(t)
 
-	ident, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	ident, signer, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 
 	found, err := service.SignerForIdentity(context.Background(), ident.ID)
@@ -89,20 +89,42 @@ func TestSignerForIdentityReturnsProvisionedKey(t *testing.T) {
 	require.Equal(t, signer.Address(), found.Address())
 }
 
-func TestResolveLenderSurvivesProvisionRace(t *testing.T) {
+func TestOnboardLenderSurvivesProvisionRace(t *testing.T) {
 	service, store := newTestService(t)
 	store.conflictOnce = true
 
-	_, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	_, signer, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	// The winner's key (installed by the fake during the conflict) is used, not the loser's.
 	require.Equal(t, store.keysByIdentity[store.identities[testIssuerURL+"/alice"].ID].Address, signer.Address().Hex())
 }
 
+func TestLenderAddressRequiresOnboarding(t *testing.T) {
+	service, _ := newTestService(t)
+
+	// Never seen at all.
+	_, _, err := service.LenderAddress(context.Background(), testIssuerURL, "alice")
+	require.ErrorIs(t, err, ErrNotOnboarded)
+
+	// Identity row exists (seen on a read) but no wallet was provisioned: still not onboarded.
+	_, err = service.ResolveIdentity(context.Background(), testIssuerURL, "alice")
+	require.NoError(t, err)
+	_, _, err = service.LenderAddress(context.Background(), testIssuerURL, "alice")
+	require.ErrorIs(t, err, ErrNotOnboarded)
+
+	// Onboarding provisions the wallet; the named lookup now resolves.
+	ident, signer, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
+	require.NoError(t, err)
+	foundIdent, address, err := service.LenderAddress(context.Background(), testIssuerURL, "alice")
+	require.NoError(t, err)
+	require.Equal(t, ident.ID, foundIdent.ID)
+	require.Equal(t, signer.Address(), address)
+}
+
 func TestSignerForAddress(t *testing.T) {
 	service, _ := newTestService(t)
 
-	_, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	_, signer, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 
 	found, err := service.SignerForAddress(context.Background(), signer.Address())
@@ -116,7 +138,7 @@ func TestSignerForAddress(t *testing.T) {
 func TestDecryptRejectsUnknownEncryptor(t *testing.T) {
 	service, store := newTestService(t)
 
-	ident, _, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	ident, _, err := service.OnboardLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 
 	row := store.keysByIdentity[ident.ID]
@@ -142,6 +164,14 @@ func (f *fakeStore) GetOrCreateIdentity(_ context.Context, arg db.GetOrCreateIde
 	f.nextID++
 	ident := db.Identity{ID: f.nextID, Issuer: arg.Issuer, Subject: arg.Subject, Role: arg.Role}
 	f.identities[key] = ident
+	return ident, nil
+}
+
+func (f *fakeStore) GetIdentityByIssuerSubject(_ context.Context, arg db.GetIdentityByIssuerSubjectParams) (db.Identity, error) {
+	ident, ok := f.identities[arg.Issuer+"/"+arg.Subject]
+	if !ok {
+		return db.Identity{}, pgx.ErrNoRows
+	}
 	return ident, nil
 }
 

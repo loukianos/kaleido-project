@@ -23,6 +23,7 @@ var (
 	ErrNoCustodialKey   = errors.New("no custodial key for this address")
 	ErrUnknownEncryptor = errors.New("signing key sealed by an unknown encryptor")
 	ErrInvalidSubject   = errors.New("subject must not be empty")
+	ErrNotOnboarded     = errors.New("lender has not onboarded")
 )
 
 const uniqueViolationSQLState = "23505"
@@ -31,6 +32,7 @@ const uniqueViolationSQLState = "23505"
 type Store interface {
 	GetOrCreateIdentity(context.Context, db.GetOrCreateIdentityParams) (db.Identity, error)
 	GetIdentityByID(context.Context, int64) (db.Identity, error)
+	GetIdentityByIssuerSubject(context.Context, db.GetIdentityByIssuerSubjectParams) (db.Identity, error)
 	GetSigningKeyByIdentityID(context.Context, int64) (db.SigningKey, error)
 	GetSigningKeyByAddress(context.Context, string) (db.SigningKey, error)
 	CreateSigningKey(context.Context, db.CreateSigningKeyParams) (db.SigningKey, error)
@@ -61,9 +63,10 @@ func (s *Service) ResolveIdentity(ctx context.Context, issuer, subject string) (
 	return ident, nil
 }
 
-// ResolveLender returns the lender identity for (issuer, subject) and the signer for its custodial key, provisioning both on first sight.
-// On a network that charges gas, provisioning is where a funding transfer would happen; the local Besu network is gas-free, so none is needed.
-func (s *Service) ResolveLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error) {
+// OnboardLender is the explicit onboarding step: it creates the lender identity for (issuer, subject) if new and eagerly provisions its custodial wallet.
+// On a network that charges gas, this is where a funding transfer would happen; the local Besu network is gas-free, so none is needed.
+// Idempotent: an already-onboarded lender gets their existing identity and key back.
+func (s *Service) OnboardLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error) {
 	ident, err := s.ResolveIdentity(ctx, issuer, subject)
 	if err != nil {
 		return db.Identity{}, nil, err
@@ -74,6 +77,34 @@ func (s *Service) ResolveLender(ctx context.Context, issuer, subject string) (db
 		return db.Identity{}, nil, err
 	}
 	return ident, signer, nil
+}
+
+// LenderAddress resolves a subject named in a request body to an onboarded lender's identity and custodial address.
+// Unlike OnboardLender it never creates anything: naming a lender who hasn't onboarded is ErrNotOnboarded, so provisioning strictly precedes participation.
+func (s *Service) LenderAddress(ctx context.Context, issuer, subject string) (db.Identity, common.Address, error) {
+	if issuer == "" || subject == "" {
+		return db.Identity{}, common.Address{}, ErrInvalidSubject
+	}
+	ident, err := s.store.GetIdentityByIssuerSubject(ctx, db.GetIdentityByIssuerSubjectParams{
+		Issuer:  issuer,
+		Subject: subject,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Identity{}, common.Address{}, fmt.Errorf("%w: %s", ErrNotOnboarded, subject)
+	}
+	if err != nil {
+		return db.Identity{}, common.Address{}, fmt.Errorf("get identity: %w", err)
+	}
+
+	row, err := s.store.GetSigningKeyByIdentityID(ctx, ident.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// An identity row without a wallet has been seen but never onboarded.
+		return db.Identity{}, common.Address{}, fmt.Errorf("%w: %s", ErrNotOnboarded, subject)
+	}
+	if err != nil {
+		return db.Identity{}, common.Address{}, fmt.Errorf("get signing key: %w", err)
+	}
+	return ident, common.HexToAddress(row.Address), nil
 }
 
 // SignerForIdentity returns the signer for an identity's existing custodial key, or ErrNoCustodialKey when none was ever provisioned.

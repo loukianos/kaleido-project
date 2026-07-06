@@ -568,6 +568,8 @@ func writeLoanError(c *gin.Context, err error) bool {
 		c.JSON(http.StatusBadRequest, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrNotNoteOwner):
 		c.JSON(http.StatusForbidden, errorBody(err.Error()))
+	case errors.Is(err, identity.ErrNotOnboarded):
+		c.JSON(http.StatusUnprocessableEntity, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrLoanNotActive),
 		errors.Is(err, loans.ErrLoanNotTransferable),
 		errors.Is(err, loans.ErrLoanMissingToken),

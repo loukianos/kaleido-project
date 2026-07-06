@@ -35,6 +35,7 @@ func addRoutes(router *gin.Engine, version string, logger *slog.Logger, opts Opt
 	authed.GET("/contracts/active", handleActiveContract(logger, opts.Contracts))
 	authed.GET("/contracts/:id", handleGetContract(logger, opts.Contracts))
 
+	authed.POST("/lenders/onboard", handleOnboardLender(logger, opts.Identities))
 	servicer.POST("/loans", handleCreateLoan(logger, opts.Loans))
 	authed.GET("/loans", handleListLoans(logger, opts.Loans, opts.Identities))
 	authed.GET("/loans/:id", handleGetLoan(logger, opts.Loans, opts.Identities))
