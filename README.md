@@ -4,8 +4,8 @@
 
 A Go API microservice for a loan-note business use case backed by an ERC-721 NFT.
 Each token represents a lender's claim to repayment.
-- Origination mints the note
-- Transfer assigns the claim to a new lender
+- Origination mints the note to the lender, who owns it outright
+- Transfer assigns the claim to a new lender via owner-signed ERC-721 transfers
 - Final repayment settles the loan and burns the NFT.
 
 ## Requirements
@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # run a simple demo that checks readiness, deploys a contract, originates two loans, repays one, defaults the other, prints results
+make demo # deploys a contract, warehouses + sells a loan, repays it, shows the platform can't move a lender-owned note, defaults it
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -45,9 +45,21 @@ By convention, we commit all generated code, so that `git clone`rs don't need to
 
 The ERC-721 contract (OpenZeppelin 5.2.0, Solidity 0.8.28) lives in `contracts/`, built with [Hardhat](https://hardhat.org/).
 
+Authorization uses OpenZeppelin `AccessControl` rather than a single owner:
+
+- `ORIGINATOR_ROLE` may originate (mint) notes.
+- `SERVICER_ROLE` may settle (burn on final repayment) and mark loans defaulted.
+- `DEFAULT_ADMIN_ROLE` grants and revokes roles; the deployer starts with all three.
+
+There is deliberately no admin transfer path.
+Notes move only through standard owner-signed ERC-721 transfers, so the platform provably cannot reassign a lender's claim.
+The one exception is settlement, which burns the note regardless of holder because final repayment extinguishes the claim.
+Until per-identity signing keys land, the API signs everything with the platform key, so the transfer endpoint only succeeds for notes the platform itself holds (warehouse originations to its own address) and returns 409 otherwise.
+
 ```bash
 make contracts-install # npm install
 make contracts-build # compile
+make contracts-test # hardhat contract tests
 make contracts-deploy # deploy LoanNote to local Besu via Hardhat Ignition, not actually used for the demo, more for dev/debugging
 ```
 
@@ -133,6 +145,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull
 - **lint** — `golangci-lint` (pinned to the same version used locally)
 - **test** — `make test` (race detector on)
 - **generated** — regenerates sqlc, swagger, and contract bindings, then fails if the committed copies are out of sync (the CI enforcement of the [pre-commit hooks](#git-hooks))
+- **contracts** — Hardhat contract tests (`make contracts-test`)
 - **docker** — verifies the API image builds
 
 Contract bytecode is compiled with `metadata.bytecodeHash: "none"` so the committed Go bindings are reproducible byte-for-byte across machines.

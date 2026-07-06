@@ -480,6 +480,7 @@ func writeLoanError(c *gin.Context, err error) bool {
 		c.JSON(http.StatusBadRequest, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrLoanNotActive),
 		errors.Is(err, loans.ErrLoanNotTransferable),
+		errors.Is(err, loans.ErrNotNoteOwner),
 		errors.Is(err, loans.ErrLoanMissingToken),
 		errors.Is(err, loans.ErrLoanMissingContract),
 		errors.Is(err, loans.ErrNoActiveContract),

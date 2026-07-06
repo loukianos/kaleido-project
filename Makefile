@@ -79,6 +79,10 @@ contracts-install:
 contracts-build:
 	cd contracts && npm run compile
 
+.PHONY: contracts-test
+contracts-test:
+	cd contracts && npm test
+
 .PHONY: contracts-deploy
 contracts-deploy:
 	cd contracts && npm run deploy:besu

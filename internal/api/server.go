@@ -20,6 +20,8 @@ type Options struct {
 	ReadinessChecks []ReadinessCheck
 	Contracts       ContractsService
 	Loans           LoansService
+	// SignerAddress is the platform signing key's address, surfaced so callers can originate notes into platform custody (warehouse loans).
+	SignerAddress string
 }
 
 // @title			Loan Note API
@@ -54,8 +56,9 @@ func requestLogger(logger *slog.Logger) gin.HandlerFunc {
 }
 
 type serviceInfoResponse struct {
-	Service string `json:"service"`
-	Version string `json:"version"`
+	Service       string `json:"service"`
+	Version       string `json:"version"`
+	SignerAddress string `json:"signer_address" example:"0x627306090abaB3A6e1400e9345bC60c78a8BEf57"`
 }
 
 type healthResponse struct {
@@ -76,11 +79,12 @@ type readinessResponse struct {
 //	@Produce	json
 //	@Success	200	{object}	serviceInfoResponse
 //	@Router		/ [get]
-func handleIndex(version string) gin.HandlerFunc {
+func handleIndex(version, signerAddress string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, serviceInfoResponse{
-			Service: "kaleido-project-api",
-			Version: version,
+			Service:       "kaleido-project-api",
+			Version:       version,
+			SignerAddress: signerAddress,
 		})
 	}
 }

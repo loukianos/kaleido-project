@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "compile": "hardhat compile",
+    "test": "hardhat test",
     "deploy:besu": "hardhat ignition deploy ignition/modules/LoanNote.ts --network besu --reset",
     "clean": "hardhat clean"
   },

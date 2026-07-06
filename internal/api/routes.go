@@ -17,7 +17,7 @@ import (
 func addRoutes(router *gin.Engine, version string, logger *slog.Logger, opts Options) {
 	startedAt := time.Now().UTC()
 
-	router.GET("/", handleIndex(version))
+	router.GET("/", handleIndex(version, opts.SignerAddress))
 	router.GET("/healthz", handleHealthz())
 	router.GET("/ready", handleReady(logger, startedAt, opts.ReadinessChecks, opts.Contracts))
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
