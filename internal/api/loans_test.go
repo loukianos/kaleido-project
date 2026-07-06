@@ -49,7 +49,7 @@ func TestCreateLoan(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, int64(100_00), service.request.PrincipalMinor)
@@ -90,7 +90,7 @@ func TestCreateLoanWithContractID(t *testing.T) {
 		"term_days":365,
 		"contract_id":2
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.NotNil(t, service.request.ContractID)
@@ -115,7 +115,7 @@ func TestCreateLoanContractNotFound(t *testing.T) {
 		"term_days":365,
 		"contract_id":99
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
@@ -127,7 +127,7 @@ func TestCreateLoanValidation(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans", strings.NewReader(`{"borrower_ref":""}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
@@ -156,7 +156,7 @@ func TestCreateLoanWithLenderSubject(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, "alice", service.request.LenderSubject)
@@ -181,7 +181,7 @@ func TestCreateLoanLenderExclusivity(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
@@ -206,7 +206,7 @@ func TestTransferLoanToSubject(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{"to_subject":"bob"}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "bob", service.transferRequest.ToSubject)
@@ -229,7 +229,7 @@ func TestCreateLoanDomainError(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
@@ -247,7 +247,7 @@ func TestCreateLoanNoActiveContract(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 
@@ -271,7 +271,7 @@ func TestCreateLoanLockBusy(t *testing.T) {
 		"apr_bps":800,
 		"term_days":365
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
@@ -303,7 +303,7 @@ func TestGetLoan(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans/7", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(7), service.getID)
@@ -323,7 +323,7 @@ func TestGetLoanNotFound(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans/99", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 }
@@ -352,7 +352,7 @@ func TestListLoans(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans?lender=0xabc&status=active&limit=10&offset=5", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "0xabc", service.listRequest.Lender)
@@ -376,7 +376,7 @@ func TestListLoansAbsentLimitPassesZero(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int32(0), service.listRequest.Limit)
@@ -400,7 +400,7 @@ func TestListLoansInvalidPagination(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, target, nil)
-			handler.ServeHTTP(recorder, request)
+			handler.ServeHTTP(recorder, asServicer(request))
 
 			require.Equal(t, http.StatusBadRequest, recorder.Code)
 		})
@@ -422,7 +422,7 @@ func TestLoanTerms(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans/7/terms", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 
@@ -459,7 +459,7 @@ func TestTransferLoan(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{
 		"to_address":"0x1111111111111111111111111111111111111111"
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(7), service.transferLoanID)
@@ -481,7 +481,7 @@ func TestTransferLoanConflict(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{
 		"to_address":"0x1111111111111111111111111111111111111111"
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
@@ -497,9 +497,9 @@ func TestTransferLoanNotNoteOwner(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/transfer", strings.NewReader(`{
 		"to_address":"0x1111111111111111111111111111111111111111"
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
-	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.Equal(t, http.StatusForbidden, recorder.Code)
 
 	var body errorResponse
 	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&body))
@@ -532,7 +532,7 @@ func TestDefaultLoan(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/default", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(7), service.defaultLoanID)
@@ -551,7 +551,7 @@ func TestDefaultLoanConflict(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/default", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
@@ -590,7 +590,7 @@ func TestCreateRepayment(t *testing.T) {
 		"amount_minor":5000,
 		"external_ref":"payment-1"
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, int64(7), service.repaymentLoanID)
@@ -629,7 +629,7 @@ func TestCreateFinalRepayment(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/repayments", strings.NewReader(`{"amount_minor":10800}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 
@@ -647,7 +647,7 @@ func TestCreateRepaymentConflict(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/loans/7/repayments", strings.NewReader(`{"amount_minor":5000}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
@@ -662,7 +662,7 @@ func TestCreateRepaymentDuplicateExternalRef(t *testing.T) {
 		"amount_minor":5000,
 		"external_ref":"payment-1"
 	}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 }
@@ -679,7 +679,7 @@ func TestListRepayments(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/loans/7/repayments", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(7), service.listRepaymentsLoanID)
@@ -714,8 +714,11 @@ type fakeLoansService struct {
 	listRepaymentsErr    error
 	transferLoanID       int64
 	transferRequest      loans.TransferRequest
+	transferCaller       loans.Caller
 	transferResult       loans.TransferResult
 	transferErr          error
+	loan                 db.Loan
+	loanErr              error
 	defaultLoanID        int64
 	defaultResult        loans.DefaultResult
 	defaultErr           error
@@ -770,13 +773,21 @@ func (f *fakeLoansService) ListRepayments(_ context.Context, loanID int64) ([]db
 	return f.repayments, nil
 }
 
-func (f *fakeLoansService) Transfer(_ context.Context, loanID int64, req loans.TransferRequest) (loans.TransferResult, error) {
+func (f *fakeLoansService) Transfer(_ context.Context, loanID int64, req loans.TransferRequest, caller loans.Caller) (loans.TransferResult, error) {
 	f.transferLoanID = loanID
 	f.transferRequest = req
+	f.transferCaller = caller
 	if f.transferErr != nil {
 		return loans.TransferResult{}, f.transferErr
 	}
 	return f.transferResult, nil
+}
+
+func (f *fakeLoansService) Loan(_ context.Context, _ int64) (db.Loan, error) {
+	if f.loanErr != nil {
+		return db.Loan{}, f.loanErr
+	}
+	return f.loan, nil
 }
 
 func (f *fakeLoansService) Default(_ context.Context, loanID int64) (loans.DefaultResult, error) {

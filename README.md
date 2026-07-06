@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # deploys a contract, warehouses + sells a loan, shows the platform can't move a lender-owned note, moves a note between custodial lenders signed by their own keys, originates a loan on a second contract instance
+make demo # authenticates all actors via Keycloak, deploys a contract, warehouses + sells a loan, shows anonymous and non-owner calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -91,12 +91,42 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `LOAN_BASE_URI`        | local API loans URI                 | Base URI used to build loan metadata URIs |
 | `DEPLOYER_PRIVATE_KEY` | throwaway dev key                   | In-app transaction signer key             |
 | `KEY_ENCRYPTION_MASTER_KEY` | throwaway dev key              | AES-256 master key encrypting custodial signing keys at rest |
+| `OIDC_ISSUER_URL`      | local Keycloak realm                | Expected token issuer                     |
+| `OIDC_JWKS_URL`        | derived from issuer                 | Where the API fetches signing keys (compose overrides to the service-network URL) |
+| `OIDC_AUDIENCE`        | `loan-notes-api`                    | Expected token audience                   |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
 Nonce-sensitive chain writes are serialized with a short-lived DB-backed lock keyed by chain id and signing address.
 That keeps multiple API instances from submitting transactions with the same nonce while leaving the runtime itself stateless.
 Because the lock is per key, custodial identities' writes never contend with each other or with the platform key; the remaining serialization point is platform-signed operations, which a pool of servicer keys could shard further.
+
+## Authentication
+
+Every endpoint except the system ones (`/`, `/healthz`, `/ready`, `/swagger`) requires an OIDC bearer token.
+The compose stack ships a [Keycloak](https://www.keycloak.org/) instance with a seeded `loan-notes` realm (`.local/keycloak-realm.json`), so the full authenticated flow runs offline:
+
+- a `servicer` service client (client-credentials grant) whose service account holds the `servicer` and `admin` realm roles
+- two demo lender users, `alice` and `bob` (password grant via the public `loan-notes-app` client), with no roles
+
+The API validates tokens against the issuer's JWKS (issuer + audience checks) and reads roles from the `realm_access` claim; roles are never self-assigned.
+Route policy:
+
+| Route | Who |
+|-------|-----|
+| `POST /admin/contracts/deploy`, `POST /admin/contracts/{id}/activate` | admin |
+| `POST /loans`, `POST /loans/{id}/repayments`, `POST /loans/{id}/default` | servicer |
+| `POST /loans/{id}/transfer` | the note's owner: the holding lender under their own token, or the servicer for platform-held warehouse notes |
+| `GET` endpoints | any authenticated caller; lenders see only loans they hold |
+
+Lender identities are keyed by the token's `(iss, sub)` and created on first authenticated sight; the servicer names custodial lenders by their OIDC subject when originating.
+
+Example token fetch against the dev realm:
+
+```bash
+curl -s http://localhost:8081/realms/loan-notes/protocol/openid-connect/token \
+  -d 'grant_type=password&client_id=loan-notes-app&username=alice&password=alice-password'
+```
 
 ## Identities and custodial keys
 

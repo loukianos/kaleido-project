@@ -32,7 +32,7 @@ func TestDeployContract(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/deploy", strings.NewReader(`{"base_uri":"https://example.test/loans/","activate":true}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.Equal(t, "https://example.test/loans/", service.deployBaseURI)
@@ -52,7 +52,7 @@ func TestDeployContractLockBusy(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/deploy", strings.NewReader(`{}`))
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }
@@ -69,7 +69,7 @@ func TestListContracts(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/contracts", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 
@@ -88,7 +88,7 @@ func TestGetContract(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/contracts/3", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(3), service.contractID)
@@ -105,7 +105,7 @@ func TestGetContractNotFound(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/contracts/99", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 }
@@ -118,7 +118,7 @@ func TestActivateContract(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/3/activate", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(3), service.activateID)
@@ -135,7 +135,7 @@ func TestActivateContractNotFound(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/contracts/99/activate", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 }
@@ -155,7 +155,7 @@ func TestActiveContract(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/contracts/active", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 
@@ -171,7 +171,7 @@ func TestActiveContractNotFound(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/contracts/active", nil)
-	handler.ServeHTTP(recorder, request)
+	handler.ServeHTTP(recorder, asServicer(request))
 
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 }

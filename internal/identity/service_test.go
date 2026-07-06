@@ -15,7 +15,10 @@ import (
 	"kaleido-project/internal/keys"
 )
 
-const testMasterKey = "56659eba0b040dfd7503c987c0c26428a476b3ee49747a181f6f7361e253e4a3"
+const (
+	testMasterKey = "56659eba0b040dfd7503c987c0c26428a476b3ee49747a181f6f7361e253e4a3"
+	testIssuerURL = "http://issuer.test/realms/loan-notes"
+)
 
 func newTestService(t *testing.T) (*Service, *fakeStore) {
 	t.Helper()
@@ -28,10 +31,10 @@ func newTestService(t *testing.T) (*Service, *fakeStore) {
 func TestResolveLenderProvisionsOnFirstSight(t *testing.T) {
 	service, store := newTestService(t)
 
-	ident, signer, err := service.ResolveLender(context.Background(), "alice")
+	ident, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	require.Equal(t, "alice", ident.Subject)
-	require.Equal(t, LocalIssuer, ident.Issuer)
+	require.Equal(t, testIssuerURL, ident.Issuer)
 	require.Equal(t, RoleLender, ident.Role)
 	require.NotNil(t, signer)
 
@@ -45,37 +48,61 @@ func TestResolveLenderProvisionsOnFirstSight(t *testing.T) {
 func TestResolveLenderReusesExistingKey(t *testing.T) {
 	service, _ := newTestService(t)
 
-	_, first, err := service.ResolveLender(context.Background(), "alice")
+	_, first, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
-	_, second, err := service.ResolveLender(context.Background(), "alice")
+	_, second, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	require.Equal(t, first.Address(), second.Address())
 
-	_, other, err := service.ResolveLender(context.Background(), "bob")
+	_, other, err := service.ResolveLender(context.Background(), testIssuerURL, "bob")
 	require.NoError(t, err)
 	require.NotEqual(t, first.Address(), other.Address())
 }
 
 func TestResolveLenderRejectsEmptySubject(t *testing.T) {
 	service, _ := newTestService(t)
-	_, _, err := service.ResolveLender(context.Background(), "")
+	_, _, err := service.ResolveLender(context.Background(), testIssuerURL, "")
 	require.ErrorIs(t, err, ErrInvalidSubject)
+	_, _, err = service.ResolveLender(context.Background(), "", "alice")
+	require.ErrorIs(t, err, ErrInvalidSubject)
+}
+
+func TestResolveIdentityDoesNotProvisionKey(t *testing.T) {
+	service, store := newTestService(t)
+
+	ident, err := service.ResolveIdentity(context.Background(), testIssuerURL, "alice")
+	require.NoError(t, err)
+	require.Empty(t, store.keysByIdentity)
+
+	_, err = service.SignerForIdentity(context.Background(), ident.ID)
+	require.ErrorIs(t, err, ErrNoCustodialKey)
+}
+
+func TestSignerForIdentityReturnsProvisionedKey(t *testing.T) {
+	service, _ := newTestService(t)
+
+	ident, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
+	require.NoError(t, err)
+
+	found, err := service.SignerForIdentity(context.Background(), ident.ID)
+	require.NoError(t, err)
+	require.Equal(t, signer.Address(), found.Address())
 }
 
 func TestResolveLenderSurvivesProvisionRace(t *testing.T) {
 	service, store := newTestService(t)
 	store.conflictOnce = true
 
-	_, signer, err := service.ResolveLender(context.Background(), "alice")
+	_, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 	// The winner's key (installed by the fake during the conflict) is used, not the loser's.
-	require.Equal(t, store.keysByIdentity[store.identities[LocalIssuer+"/alice"].ID].Address, signer.Address().Hex())
+	require.Equal(t, store.keysByIdentity[store.identities[testIssuerURL+"/alice"].ID].Address, signer.Address().Hex())
 }
 
 func TestSignerForAddress(t *testing.T) {
 	service, _ := newTestService(t)
 
-	_, signer, err := service.ResolveLender(context.Background(), "alice")
+	_, signer, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 
 	found, err := service.SignerForAddress(context.Background(), signer.Address())
@@ -89,7 +116,7 @@ func TestSignerForAddress(t *testing.T) {
 func TestDecryptRejectsUnknownEncryptor(t *testing.T) {
 	service, store := newTestService(t)
 
-	ident, _, err := service.ResolveLender(context.Background(), "alice")
+	ident, _, err := service.ResolveLender(context.Background(), testIssuerURL, "alice")
 	require.NoError(t, err)
 
 	row := store.keysByIdentity[ident.ID]

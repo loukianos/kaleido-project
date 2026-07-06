@@ -17,9 +17,6 @@ import (
 	"kaleido-project/internal/keys"
 )
 
-// LocalIssuer marks identities created before OIDC lands; the OIDC slice replaces it with the token issuer.
-const LocalIssuer = "local"
-
 const RoleLender = "lender"
 
 var (
@@ -48,26 +45,40 @@ func NewService(store Store, encryptor keys.Encryptor) *Service {
 	return &Service{store: store, encryptor: encryptor}
 }
 
-// ResolveLender returns the lender identity for subject and the signer for its custodial key, provisioning both on first sight.
-// On a network that charges gas, provisioning is where a funding transfer would happen; the local Besu network is gas-free, so none is needed.
-func (s *Service) ResolveLender(ctx context.Context, subject string) (db.Identity, *eth.Signer, error) {
-	if subject == "" {
-		return db.Identity{}, nil, ErrInvalidSubject
+// ResolveIdentity returns the lender identity for (issuer, subject), creating it on first sight without provisioning a key.
+func (s *Service) ResolveIdentity(ctx context.Context, issuer, subject string) (db.Identity, error) {
+	if issuer == "" || subject == "" {
+		return db.Identity{}, ErrInvalidSubject
 	}
 	ident, err := s.store.GetOrCreateIdentity(ctx, db.GetOrCreateIdentityParams{
-		Issuer:  LocalIssuer,
+		Issuer:  issuer,
 		Subject: subject,
 		Role:    RoleLender,
 	})
 	if err != nil {
-		return db.Identity{}, nil, fmt.Errorf("get or create identity: %w", err)
+		return db.Identity{}, fmt.Errorf("get or create identity: %w", err)
+	}
+	return ident, nil
+}
+
+// ResolveLender returns the lender identity for (issuer, subject) and the signer for its custodial key, provisioning both on first sight.
+// On a network that charges gas, provisioning is where a funding transfer would happen; the local Besu network is gas-free, so none is needed.
+func (s *Service) ResolveLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error) {
+	ident, err := s.ResolveIdentity(ctx, issuer, subject)
+	if err != nil {
+		return db.Identity{}, nil, err
 	}
 
-	signer, err := s.signerForIdentity(ctx, ident.ID)
+	signer, err := s.signerForIdentity(ctx, ident.ID, true)
 	if err != nil {
 		return db.Identity{}, nil, err
 	}
 	return ident, signer, nil
+}
+
+// SignerForIdentity returns the signer for an identity's existing custodial key, or ErrNoCustodialKey when none was ever provisioned.
+func (s *Service) SignerForIdentity(ctx context.Context, identityID int64) (*eth.Signer, error) {
+	return s.signerForIdentity(ctx, identityID, false)
 }
 
 // SignerForAddress returns the signer for the custodial key holding address, or ErrNoCustodialKey when we don't hold it.
@@ -87,9 +98,12 @@ func (s *Service) Identity(ctx context.Context, id int64) (db.Identity, error) {
 	return s.store.GetIdentityByID(ctx, id)
 }
 
-func (s *Service) signerForIdentity(ctx context.Context, identityID int64) (*eth.Signer, error) {
+func (s *Service) signerForIdentity(ctx context.Context, identityID int64, provision bool) (*eth.Signer, error) {
 	row, err := s.store.GetSigningKeyByIdentityID(ctx, identityID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if !provision {
+			return nil, ErrNoCustodialKey
+		}
 		return s.provisionKey(ctx, identityID)
 	}
 	if err != nil {

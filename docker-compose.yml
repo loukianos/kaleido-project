@@ -13,6 +13,10 @@ services:
       LOAN_BASE_URI: "${LOAN_BASE_URI:-http://localhost:8080/loans/}"
       DEPLOYER_PRIVATE_KEY: "${DEPLOYER_PRIVATE_KEY:-0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63}"
       KEY_ENCRYPTION_MASTER_KEY: "${KEY_ENCRYPTION_MASTER_KEY:-6a006ea1d0bfd421d93890dfe78ec0fb16e74a9818e5a097a5d5cc0f62693051}"
+      OIDC_ISSUER_URL: "${OIDC_ISSUER_URL:-http://localhost:8081/realms/loan-notes}"
+      # JWKS is fetched by compose service name; tokens carry the host-published issuer above.
+      OIDC_JWKS_URL: "${API_OIDC_JWKS_URL:-http://keycloak:8080/realms/loan-notes/protocol/openid-connect/certs}"
+      OIDC_AUDIENCE: "${OIDC_AUDIENCE:-loan-notes-api}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -26,6 +30,24 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./.local/keycloak-realm.json:/opt/keycloak/data/import/loan-notes-realm.json:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      # The image ships no curl; bash's /dev/tcp works because start-dev only opens the port once boot (including realm import) finishes.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
 
   postgres:
     image: postgres:18-alpine

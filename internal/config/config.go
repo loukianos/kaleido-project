@@ -23,6 +23,9 @@ type Config struct {
 	LoanBaseURI            string
 	DeployerPrivateKey     string
 	KeyEncryptionMasterKey string
+	OIDCIssuerURL          string
+	OIDCJWKSURL            string
+	OIDCAudience           string
 }
 
 func Load() (Config, error) {
@@ -33,7 +36,11 @@ func Load() (Config, error) {
 		LoanBaseURI:            getenv("LOAN_BASE_URI", "http://localhost:8080/loans/"),
 		DeployerPrivateKey:     os.Getenv("DEPLOYER_PRIVATE_KEY"),
 		KeyEncryptionMasterKey: getenv("KEY_ENCRYPTION_MASTER_KEY", devKeyEncryptionMasterKey),
+		OIDCIssuerURL:          getenv("OIDC_ISSUER_URL", "http://localhost:8081/realms/loan-notes"),
+		OIDCAudience:           getenv("OIDC_AUDIENCE", "loan-notes-api"),
 	}
+	// The JWKS fetch path can differ from the issuer name in tokens (compose service name vs host-published URL).
+	cfg.OIDCJWKSURL = getenv("OIDC_JWKS_URL", cfg.OIDCIssuerURL+"/protocol/openid-connect/certs")
 
 	chainID, err := parseChainID(getenv("CHAIN_ID", "1337"))
 	if err != nil {
@@ -71,6 +78,9 @@ func (c Config) validate() error {
 	if _, err := keys.NewAESGCM(c.KeyEncryptionMasterKey); err != nil {
 		return fmt.Errorf("KEY_ENCRYPTION_MASTER_KEY is invalid: %w", err)
 	}
+	if c.OIDCIssuerURL == "" || c.OIDCJWKSURL == "" || c.OIDCAudience == "" {
+		return fmt.Errorf("OIDC_ISSUER_URL, OIDC_JWKS_URL, and OIDC_AUDIENCE must not be empty")
+	}
 	return nil
 }
 
@@ -86,6 +96,9 @@ func (c Config) LogValue() slog.Value {
 		slog.Bool("deployer_key_set", c.DeployerPrivateKey != ""),
 		// Redact master key but log whether it's set
 		slog.Bool("key_encryption_master_key_set", c.KeyEncryptionMasterKey != ""),
+		slog.String("oidc_issuer_url", c.OIDCIssuerURL),
+		slog.String("oidc_jwks_url", c.OIDCJWKSURL),
+		slog.String("oidc_audience", c.OIDCAudience),
 	)
 }
 

@@ -1,0 +1,119 @@
+{
+  "realm": "loan-notes",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      { "name": "servicer", "description": "May originate, record repayments, and mark defaults" },
+      { "name": "admin", "description": "May deploy and activate contracts" }
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "Carries the sub claim; declared explicitly for the same reason as roles",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Maps realm roles into realm_access.roles; importing a clientScopes list suppresses the built-in scope, so it is declared explicitly",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "name": "loan-notes-api-aud",
+      "description": "Stamps the API audience into access tokens",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "loan-notes-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "loan-notes-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "servicer",
+      "name": "Servicer service client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "servicer-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["basic", "roles", "loan-notes-api-aud"],
+      "optionalClientScopes": []
+    },
+    {
+      "clientId": "loan-notes-app",
+      "name": "Demo lender app (password grant)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "defaultClientScopes": ["basic", "roles", "loan-notes-api-aud"],
+      "optionalClientScopes": []
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-servicer",
+      "enabled": true,
+      "serviceAccountClientId": "servicer",
+      "realmRoles": ["servicer", "admin"]
+    },
+    {
+      "username": "alice",
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Lender",
+      "email": "alice@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "alice-password", "temporary": false }]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Lender",
+      "email": "bob@example.test",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "bob-password", "temporary": false }]
+    }
+  ]
+}

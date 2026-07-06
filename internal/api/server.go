@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+
+	"kaleido-project/internal/auth"
 )
 
 type ReadinessCheck struct {
@@ -20,16 +22,22 @@ type Options struct {
 	ReadinessChecks []ReadinessCheck
 	Contracts       ContractsService
 	Loans           LoansService
+	Verifier        auth.Verifier
+	Identities      IdentityService
 	// SignerAddress is the platform signing key's address, surfaced so callers can originate notes into platform custody (warehouse loans).
 	SignerAddress string
 }
 
-// @title			Loan Note API
-// @version		0.1.0
-// @description	API for managing ERC-721-backed loan notes
+// @title						Loan Note API
+// @version					0.1.0
+// @description				API for managing ERC-721-backed loan notes
+// @securityDefinitions.apikey	BearerAuth
+// @in							header
+// @name						Authorization
+// @description				OIDC bearer token, sent as "Bearer <token>"
 func New(version string, logger *slog.Logger, opts Options) http.Handler {
-	if opts.Loans == nil || opts.Contracts == nil {
-		panic("api: Options.Loans and Options.Contracts are required")
+	if opts.Loans == nil || opts.Contracts == nil || opts.Verifier == nil || opts.Identities == nil {
+		panic("api: Options.Loans, Contracts, Verifier, and Identities are required")
 	}
 
 	gin.SetMode(gin.ReleaseMode)

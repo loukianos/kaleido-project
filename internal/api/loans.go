@@ -20,11 +20,12 @@ import (
 type LoansService interface {
 	Originate(context.Context, loans.OriginateRequest) (loans.OriginateResult, error)
 	Get(context.Context, int64) (loans.ReadResult, error)
+	Loan(context.Context, int64) (db.Loan, error)
 	List(context.Context, loans.ListRequest) ([]db.Loan, error)
 	Terms(context.Context, int64) (loans.LoanTerms, error)
 	RecordRepayment(context.Context, int64, loans.RepaymentRequest) (loans.RepaymentResult, error)
 	ListRepayments(context.Context, int64) ([]db.Repayment, error)
-	Transfer(context.Context, int64, loans.TransferRequest) (loans.TransferResult, error)
+	Transfer(context.Context, int64, loans.TransferRequest, loans.Caller) (loans.TransferResult, error)
 	Default(context.Context, int64) (loans.DefaultResult, error)
 }
 
@@ -51,6 +52,7 @@ type createLoanRequest struct {
 //	@Failure	400		{object}	errorResponse
 //	@Failure	409		{object}	errorResponse	"No active contract deployed"
 //	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Security	BearerAuth
 //	@Router		/loans [post]
 func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -93,13 +95,18 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 //	@Summary	Get loan
 //	@Tags		loans
 //	@Produce	json
-//	@Param		id	path		int	true	"Loan ID"
+//	@Param		id	path	int	true	"Loan ID"
+//	@Security	BearerAuth
 //	@Success	200	{object}	loanResponse
 //	@Failure	404	{object}	errorResponse
 //	@Router		/loans/{id} [get]
-func handleGetLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+func handleGetLoan(logger *slog.Logger, service LoansService, identities IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
+		if !ok {
+			return
+		}
+		caller, ok := callerFor(c, logger, identities)
 		if !ok {
 			return
 		}
@@ -111,6 +118,11 @@ func handleGetLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 			}
 			logger.ErrorContext(c.Request.Context(), "get loan failed", "error", err)
 			c.JSON(http.StatusInternalServerError, errorBody("get loan failed"))
+			return
+		}
+		// Lenders see only loans they hold; a foreign loan reads as not found rather than confirming its existence.
+		if !canReadLoan(caller, result.Loan) {
+			c.JSON(http.StatusNotFound, errorBody("loan not found"))
 			return
 		}
 		c.JSON(http.StatusOK, loanResponseFromRead(result))
@@ -126,14 +138,15 @@ type loansListResponse struct {
 //	@Summary	List loans
 //	@Tags		loans
 //	@Produce	json
-//	@Param		lender	query		string	false	"Filter by lender address (case-insensitive)"
-//	@Param		status	query		string	false	"Filter by loan status"	Enums(originating, active, settling, repaid, defaulted)
-//	@Param		limit	query		int		false	"Page size"				minimum(1)	maximum(100)	default(50)
-//	@Param		offset	query		int		false	"Result offset"			minimum(0)
-//	@Success	200		{object}	loansListResponse
-//	@Failure	400		{object}	errorResponse
+//	@Param		lender	query	string	false	"Filter by lender address (case-insensitive)"
+//	@Param		status	query	string	false	"Filter by loan status"	Enums(originating, active, settling, repaid, defaulted)
+//	@Param		limit	query	int		false	"Page size"				minimum(1)	maximum(100)	default(50)
+//	@Param		offset	query	int		false	"Result offset"			minimum(0)
+//	@Security	BearerAuth
+//	@Success	200	{object}	loansListResponse
+//	@Failure	400	{object}	errorResponse
 //	@Router		/loans [get]
-func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+func handleListLoans(logger *slog.Logger, service LoansService, identities IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Zero means "not specified". The service applies its default.
 		limit := int32(0)
@@ -155,11 +168,17 @@ func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc 
 			offset = int32(parsed)
 		}
 
+		caller, ok := callerFor(c, logger, identities)
+		if !ok {
+			return
+		}
+
 		items, err := service.List(c.Request.Context(), loans.ListRequest{
-			Lender: c.Query("lender"),
-			Status: c.Query("status"),
-			Limit:  limit,
-			Offset: offset,
+			Lender:           c.Query("lender"),
+			LenderIdentityID: caller.IdentityID,
+			Status:           c.Query("status"),
+			Limit:            limit,
+			Offset:           offset,
 		})
 		if err != nil {
 			logger.ErrorContext(c.Request.Context(), "list loans failed", "error", err)
@@ -180,14 +199,18 @@ func handleListLoans(logger *slog.Logger, service LoansService) gin.HandlerFunc 
 //	@Summary	Loan terms for tokenURI
 //	@Tags		loans
 //	@Produce	json
-//	@Param		id	path		int	true	"Loan ID"
+//	@Param		id	path	int	true	"Loan ID"
+//	@Security	BearerAuth
 //	@Success	200	{object}	termsResponse
 //	@Failure	404	{object}	errorResponse
 //	@Router		/loans/{id}/terms [get]
-func handleLoanTerms(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+func handleLoanTerms(logger *slog.Logger, service LoansService, identities IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
 		if !ok {
+			return
+		}
+		if !authorizeLoanRead(c, logger, service, identities, id) {
 			return
 		}
 
@@ -222,15 +245,17 @@ type transferLoanRequest struct {
 //	@Tags		loans
 //	@Accept		json
 //	@Produce	json
-//	@Param		id		path		int					true	"Loan ID"
-//	@Param		request	body		transferLoanRequest	true	"Transfer target"
-//	@Success	200		{object}	loanResponse
-//	@Failure	400		{object}	errorResponse
-//	@Failure	404		{object}	errorResponse
-//	@Failure	409		{object}	errorResponse	"Loan is not transferable"
-//	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Param		id		path	int					true	"Loan ID"
+//	@Param		request	body	transferLoanRequest	true	"Transfer target"
+//	@Security	BearerAuth
+//	@Success	200	{object}	loanResponse
+//	@Failure	400	{object}	errorResponse
+//	@Failure	403	{object}	errorResponse	"Caller does not own the note"
+//	@Failure	404	{object}	errorResponse
+//	@Failure	409	{object}	errorResponse	"Loan is not transferable"
+//	@Failure	503	{object}	errorResponse	"Another chain operation is in progress, retry shortly"
 //	@Router		/loans/{id}/transfer [post]
-func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+func handleTransferLoan(logger *slog.Logger, service LoansService, identities IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
 		if !ok {
@@ -242,8 +267,12 @@ func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFu
 			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
+		caller, ok := callerFor(c, logger, identities)
+		if !ok {
+			return
+		}
 
-		result, err := service.Transfer(c.Request.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress, ToSubject: req.ToSubject})
+		result, err := service.Transfer(c.Request.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress, ToSubject: req.ToSubject}, caller)
 		if err != nil {
 			if writeLoanError(c, err) {
 				return
@@ -269,6 +298,7 @@ func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFu
 //	@Failure	404	{object}	errorResponse
 //	@Failure	409	{object}	errorResponse	"Loan is not active"
 //	@Failure	503	{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Security	BearerAuth
 //	@Router		/loans/{id}/default [post]
 func handleDefaultLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -310,6 +340,7 @@ type createRepaymentRequest struct {
 //	@Failure	404		{object}	errorResponse
 //	@Failure	409		{object}	errorResponse	"Loan not active or duplicate external_ref"
 //	@Failure	503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Security	BearerAuth
 //	@Router		/loans/{id}/repayments [post]
 func handleCreateRepayment(logger *slog.Logger, service LoansService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -355,14 +386,18 @@ type repaymentsListResponse struct {
 //	@Summary	List repayments
 //	@Tags		loans
 //	@Produce	json
-//	@Param		id	path		int	true	"Loan ID"
+//	@Param		id	path	int	true	"Loan ID"
+//	@Security	BearerAuth
 //	@Success	200	{object}	repaymentsListResponse
 //	@Failure	404	{object}	errorResponse
 //	@Router		/loans/{id}/repayments [get]
-func handleListRepayments(logger *slog.Logger, service LoansService) gin.HandlerFunc {
+func handleListRepayments(logger *slog.Logger, service LoansService, identities IdentityService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := pathID(c)
 		if !ok {
+			return
+		}
+		if !authorizeLoanRead(c, logger, service, identities, id) {
 			return
 		}
 
@@ -426,6 +461,31 @@ func repaymentResponseFromRepayment(repayment db.Repayment) repaymentResponse {
 		ExternalRef: stringFromNull(repayment.ExternalRef),
 		CreatedAt:   repayment.CreatedAt,
 	}
+}
+
+// authorizeLoanRead loads the loan and enforces lender read scoping, writing the error response when the caller may not see it.
+func authorizeLoanRead(c *gin.Context, logger *slog.Logger, service LoansService, identities IdentityService, loanID int64) bool {
+	caller, ok := callerFor(c, logger, identities)
+	if !ok {
+		return false
+	}
+	if caller.Servicer {
+		return true
+	}
+	loan, err := service.Loan(c.Request.Context(), loanID)
+	if err != nil {
+		if writeLoanError(c, err) {
+			return false
+		}
+		logger.ErrorContext(c.Request.Context(), "get loan failed", "error", err)
+		c.JSON(http.StatusInternalServerError, errorBody("get loan failed"))
+		return false
+	}
+	if !canReadLoan(caller, loan) {
+		c.JSON(http.StatusNotFound, errorBody("loan not found"))
+		return false
+	}
+	return true
 }
 
 func loanResponseWithTx(loan db.Loan, operationID int64, txHash string) loanResponse {
@@ -506,9 +566,10 @@ func writeLoanError(c *gin.Context, err error) bool {
 		errors.Is(err, identity.ErrInvalidSubject),
 		errors.Is(err, loans.ErrOverpayment):
 		c.JSON(http.StatusBadRequest, errorBody(err.Error()))
+	case errors.Is(err, loans.ErrNotNoteOwner):
+		c.JSON(http.StatusForbidden, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrLoanNotActive),
 		errors.Is(err, loans.ErrLoanNotTransferable),
-		errors.Is(err, loans.ErrNotNoteOwner),
 		errors.Is(err, loans.ErrLoanMissingToken),
 		errors.Is(err, loans.ErrLoanMissingContract),
 		errors.Is(err, loans.ErrNoActiveContract),
