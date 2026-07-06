@@ -41,6 +41,7 @@ func addRoutes(router *gin.Engine, version string, logger *slog.Logger, opts Opt
 	authed.GET("/loans/:id", handleGetLoan(logger, opts.Loans, opts.Identities))
 	authed.POST("/loans/:id/transfer", handleTransferLoan(logger, opts.Loans, opts.Identities))
 	servicer.POST("/loans/:id/default", handleDefaultLoan(logger, opts.Loans))
+	servicer.GET("/operations/:id", handleGetOperation(logger, opts.Loans))
 	servicer.POST("/loans/:id/repayments", handleCreateRepayment(logger, opts.Loans))
 	authed.GET("/loans/:id/repayments", handleListRepayments(logger, opts.Loans, opts.Identities))
 	authed.GET("/loans/:id/terms", handleLoanTerms(logger, opts.Loans, opts.Identities))

@@ -323,57 +323,74 @@ func run() error {
 		return fmt.Errorf("series loan minted on contract %d, want %d", seriesLoan.ContractID, series.ID)
 	}
 
-	// Pooled signing: concurrent servicer originations spread across the key pool instead of serializing on one nonce sequence.
-	const concurrentMints = 4
+	// Pooled signing + failure tolerance: a burst larger than the pool spreads across the keys, and overflow that finds every lock busy comes back 202 for the reconciler to drain.
+	const concurrentMints = 6
 	fmt.Printf("Originating %d loans concurrently across the servicer key pool\n", concurrentMints)
 	quiet := servicer
 	quiet.quiet = true
-	ids := make(chan int64, concurrentMints)
-	errs := make(chan error, concurrentMints)
+	type mintResult struct {
+		id       int64
+		accepted bool
+		err      error
+	}
+	results := make(chan mintResult, concurrentMints)
 	for i := range concurrentMints {
 		go func(i int) {
 			var out struct {
 				ID int64 `json:"id"`
 			}
-			body := map[string]any{
+			status, err := quiet.postStatus("/loans", map[string]any{
 				"borrower_ref":    fmt.Sprintf("demo-pool-%d-%d", time.Now().Unix(), i),
 				"lender_address":  lender,
 				"principal_minor": 1000 + i,
 				"apr_bps":         100,
 				"term_days":       30,
-			}
-			// A fully busy pool returns 503 "retry shortly"; a real client retries, so the demo does too.
-			var err error
-			for attempt := 0; attempt < 10; attempt++ {
-				if err = quiet.post("/loans", body, &out); err == nil || !strings.Contains(err.Error(), "503") {
-					break
-				}
-				time.Sleep(250 * time.Millisecond)
-			}
-			ids <- out.ID
-			errs <- err
+				"external_ref":    fmt.Sprintf("demo-pool-%d-%d", time.Now().Unix(), i),
+			}, &out)
+			results <- mintResult{id: out.ID, accepted: status == http.StatusAccepted, err: err}
 		}(i)
 	}
+	var mintIDs []int64
+	acceptedCount := 0
+	for range concurrentMints {
+		result := <-results
+		if result.err != nil {
+			return fmt.Errorf("concurrent origination: %w", result.err)
+		}
+		if result.accepted {
+			acceptedCount++
+		}
+		mintIDs = append(mintIDs, result.id)
+	}
+	fmt.Printf("%d mints completed synchronously, %d accepted as pending for the reconciler\n", concurrentMints-acceptedCount, acceptedCount)
+
+	// Every loan converges to active with no client retries: pending ones are re-driven by the reconciler.
+	fmt.Println("Polling until all loans are active")
 	mintSigners := map[string]bool{}
-	for range concurrentMints {
-		if err := <-errs; err != nil {
-			return fmt.Errorf("concurrent origination: %w", err)
+	deadline := time.Now().Add(2 * time.Minute)
+	for _, id := range mintIDs {
+		for {
+			var minted struct {
+				Status            string `json:"status"`
+				MintSignerAddress string `json:"mint_signer_address"`
+			}
+			if err := quiet.get(fmt.Sprintf("/loans/%d", id), &minted); err != nil {
+				return err
+			}
+			if minted.Status == "active" {
+				mintSigners[minted.MintSignerAddress] = true
+				break
+			}
+			if minted.Status != "originating" {
+				return fmt.Errorf("loan %d ended up %s, want active", id, minted.Status)
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("loan %d still %s after deadline", id, minted.Status)
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
-	for range concurrentMints {
-		id := <-ids
-		var minted struct {
-			MintSignerAddress string `json:"mint_signer_address"`
-		}
-		if err := quiet.get(fmt.Sprintf("/loans/%d", id), &minted); err != nil {
-			return err
-		}
-		if minted.MintSignerAddress == "" {
-			return fmt.Errorf("loan %d has no recorded mint signer", id)
-		}
-		mintSigners[minted.MintSignerAddress] = true
-	}
-	fmt.Printf("%d concurrent mints were signed by %d distinct pool keys\n", concurrentMints, len(mintSigners))
+	fmt.Printf("%d concurrent mints converged to active, signed by %d distinct pool keys\n", concurrentMints, len(mintSigners))
 	if len(mintSigners) < 2 {
 		return errors.New("concurrent mints should have spread across at least two pool keys")
 	}
@@ -436,38 +453,48 @@ func (c client) get(path string, out any) error {
 }
 
 func (c client) post(path string, body any, out any) error {
+	_, err := c.postStatus(path, body, out)
+	return err
+}
+
+func (c client) postStatus(path string, body any, out any) (int, error) {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		reader = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, reader)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, out)
+	return c.doStatus(req, out)
 }
 
 func (c client) do(req *http.Request, out any) error {
+	_, err := c.doStatus(req, out)
+	return err
+}
+
+func (c client) doStatus(req *http.Request, out any) (int, error) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return resp.StatusCode, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, bytes.TrimSpace(body))
+		return resp.StatusCode, fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, bytes.TrimSpace(body))
 	}
 
 	if !c.quiet {
@@ -481,10 +508,10 @@ func (c client) do(req *http.Request, out any) error {
 
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("decode %s response: %w", req.URL.Path, err)
+			return resp.StatusCode, fmt.Errorf("decode %s response: %w", req.URL.Path, err)
 		}
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 func getenv(key, fallback string) string {

@@ -11,11 +11,17 @@ INSERT INTO loans (
     outstanding_minor,
     status,
     mint_operation_id,
-    contract_id
+    contract_id,
+    external_ref
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 )
 RETURNING *;
+
+-- name: GetLoanByExternalRef :one
+SELECT *
+FROM loans
+WHERE external_ref = $1;
 
 -- name: SetLoanActive :one
 UPDATE loans

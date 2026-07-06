@@ -22,6 +22,20 @@ const (
 	receiptTimeout = 2 * time.Minute
 )
 
+var (
+	// ErrPending marks transient failures whose operation was journaled retryable: the platform owns the retry, so callers report 202 rather than an error.
+	ErrPending = errors.New("operation pending retry")
+	// ErrReverted marks a transaction the chain mined and rejected; retrying is futile, so the operation is terminally failed.
+	ErrReverted = errors.New("transaction reverted on chain")
+)
+
+// pendingError matches ErrPending while keeping the cause reachable through errors.Is and errors.Unwrap.
+type pendingError struct{ cause error }
+
+func (e *pendingError) Error() string        { return ErrPending.Error() + ": " + e.cause.Error() }
+func (e *pendingError) Unwrap() error        { return e.cause }
+func (e *pendingError) Is(target error) bool { return target == ErrPending }
+
 // holderSeq distinguishes concurrent acquisitions within one process. The
 // lock manager treats an acquisition by the current holder as a lease
 // renewal, so if every request shared the process-wide holder name, two
@@ -36,6 +50,7 @@ type Journal interface {
 	SetOperationSubmitted(context.Context, db.SetOperationSubmittedParams) (db.ChainOperation, error)
 	SetOperationMined(context.Context, int64) (db.ChainOperation, error)
 	SetOperationRetryable(context.Context, db.SetOperationRetryableParams) (db.ChainOperation, error)
+	SetOperationFailed(context.Context, db.SetOperationFailedParams) (db.ChainOperation, error)
 }
 
 type Submitter struct {
@@ -162,7 +177,8 @@ func (s *Submitter) submitLocked(
 		return "", nil, s.Retryable(ctx, opID, fmt.Errorf("wait for %s receipt: %w", action, err))
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
-		return "", nil, s.Retryable(ctx, opID, fmt.Errorf("%s transaction failed: %s", action, tx.Hash()))
+		// A revert is permanent: the chain evaluated the transaction and rejected it, so retrying the same call is futile.
+		return "", nil, s.Failed(ctx, opID, fmt.Errorf("%s %w: %s", action, ErrReverted, tx.Hash()))
 	}
 	if _, err := s.journal.SetOperationMined(ctx, opID); err != nil {
 		return "", nil, fmt.Errorf("mark %s mined: %w", action, err)
@@ -170,9 +186,18 @@ func (s *Submitter) submitLocked(
 	return tx.Hash().Hex(), receipt, nil
 }
 
-// Retryable records err against the operation so it can be retried later, then returns err unchanged.
+// Retryable records err against the operation so the reconciler can retry it, and wraps it in ErrPending so callers report the operation as in flight.
 func (s *Submitter) Retryable(ctx context.Context, opID int64, err error) error {
 	_, _ = s.journal.SetOperationRetryable(ctx, db.SetOperationRetryableParams{
+		ID:    opID,
+		Error: db.Ptr(err.Error()),
+	})
+	return &pendingError{cause: err}
+}
+
+// Failed terminally fails the operation, then returns err unchanged.
+func (s *Submitter) Failed(ctx context.Context, opID int64, err error) error {
+	_, _ = s.journal.SetOperationFailed(ctx, db.SetOperationFailedParams{
 		ID:    opID,
 		Error: db.Ptr(err.Error()),
 	})

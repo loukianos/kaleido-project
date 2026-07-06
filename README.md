@@ -24,7 +24,7 @@ To run the demo:
 ```bash
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
-make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance, mints concurrently across the servicer key pool
+make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance, then floods the servicer key pool: overflow mints come back 202 and the reconciler converges every loan to active with no client retries
 make dev-down # teardown database and API
 make paladin-down # take down the blockchain
 ```
@@ -95,6 +95,7 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `OIDC_JWKS_URL`        | derived from issuer                 | Where the API fetches signing keys (compose overrides to the service-network URL) |
 | `OIDC_AUDIENCE`        | `loan-notes-api`                    | Expected token audience                   |
 | `SERVICER_KEY_POOL_SIZE` | `2`                               | Extra platform signing keys for concurrent servicer chain writes |
+| `RECONCILE_INTERVAL_SECONDS` | `5`                           | How often the reconciler drains pending chain operations |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
@@ -146,6 +147,19 @@ Key material is envelope-encrypted at rest (AES-256-GCM under `KEY_ENCRYPTION_MA
 The `signing_keys` schema records the encryption scheme and key version per row, so a cloud KMS implementation can slot in behind the same `keys.Encryptor` interface without a migration.
 
 Chain writes take a DB-backed writer lock named by chain id and signing address, so writes by different identities never contend; only same-key writes serialize.
+
+## Failure tolerance
+
+Chain writes are journaled in `chain_operations` before submission, which fixes the error contract by failure class:
+
+- **Futile to retry** (validation, authorization, an on-chain revert): reported immediately as 4xx (or a revert error) and the operation fails terminally.
+- **Transient with intent recorded** (chain unreachable, all signer locks busy, receipt timeout): the API returns **202 Accepted** with the loan and operation id — the platform owns the retry, and the client polls `GET /loans/{id}` until the status converges. No client retry loops.
+- **Intent not recorded** (database unreachable mid-request): a plain 5xx. `POST /loans` accepts an `external_ref` idempotency key so that retrying this one case can never create a duplicate loan.
+
+A background **reconciler** (one leader across the fleet, elected via the lock manager every `RECONCILE_INTERVAL_SECONDS`) drains the journal: retryable originations, settlements, and defaults are re-driven from durable state; stale submitted transactions are resolved by receipt (mined → applied, reverted → failed, dropped → resubmitted); operations that exhaust their attempts fail terminally, failing the loan too when the operation carried its fate (mint, burn).
+Transfers are deliberately never re-driven — re-signing a user-initiated custody change later is the wrong default — so their transient failures report immediately and the lender re-requests.
+
+`GET /operations/{id}` (servicer) exposes an operation's status, attempts, last error, and transaction hash for operational debugging; lenders just poll their loan.
 
 ## Database
 

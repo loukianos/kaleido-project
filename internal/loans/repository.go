@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	db "kaleido-project/db/sqlc"
@@ -27,6 +29,7 @@ type CreateOriginationParams struct {
 	TermDays         int64
 	InterestDueMinor int64
 	TotalDueMinor    int64
+	ExternalRef      *string
 }
 
 type RepaymentTxResult struct {
@@ -91,6 +94,7 @@ func (r *Repository) CreateOrigination(ctx context.Context, params CreateOrigina
 			OutstandingMinor: params.TotalDueMinor,
 			Status:           LoanStatusOriginating,
 			ContractID:       db.Ptr(params.ContractID),
+			ExternalRef:      params.ExternalRef,
 		})
 		if err != nil {
 			return fmt.Errorf("create loan: %w", err)
@@ -271,6 +275,47 @@ func (r *Repository) SetOperationMined(ctx context.Context, id int64) (db.ChainO
 
 func (r *Repository) SetOperationRetryable(ctx context.Context, params db.SetOperationRetryableParams) (db.ChainOperation, error) {
 	return r.queries.SetOperationRetryable(ctx, params)
+}
+
+func (r *Repository) SetOperationFailed(ctx context.Context, params db.SetOperationFailedParams) (db.ChainOperation, error) {
+	return r.queries.SetOperationFailed(ctx, params)
+}
+
+func (r *Repository) SetOperationApplied(ctx context.Context, id int64) (db.ChainOperation, error) {
+	return r.queries.SetOperationApplied(ctx, id)
+}
+
+// FailLoan terminally fails a loan whose chain operation cannot complete.
+func (r *Repository) FailLoan(ctx context.Context, loanID int64) (db.Loan, error) {
+	return r.queries.SetLoanStatus(ctx, db.SetLoanStatusParams{ID: loanID, Status: LoanStatusFailed})
+}
+
+func (r *Repository) LoanByExternalRef(ctx context.Context, externalRef string) (db.Loan, error) {
+	return r.queries.GetLoanByExternalRef(ctx, db.Ptr(externalRef))
+}
+
+func (r *Repository) RetryableOperations(ctx context.Context, maxAttempts int32, limit int32) ([]db.ChainOperation, error) {
+	return r.queries.ListRetryableOperations(ctx, db.ListRetryableOperationsParams{MaxAttempts: maxAttempts, LimitCount: limit})
+}
+
+func (r *Repository) ExhaustedOperations(ctx context.Context, maxAttempts int32, limit int32) ([]db.ChainOperation, error) {
+	return r.queries.ListExhaustedOperations(ctx, db.ListExhaustedOperationsParams{MaxAttempts: maxAttempts, LimitCount: limit})
+}
+
+func (r *Repository) StaleSubmittedOperations(ctx context.Context, staleBefore time.Time, limit int32) ([]db.ChainOperation, error) {
+	return r.queries.ListStaleSubmittedOperations(ctx, db.ListStaleSubmittedOperationsParams{StaleBefore: staleBefore, LimitCount: limit})
+}
+
+// IdentityIDByAddress resolves a custodial key's identity, or nil when the address isn't custodied.
+func (r *Repository) IdentityIDByAddress(ctx context.Context, address string) (*int64, error) {
+	row, err := r.queries.GetSigningKeyByAddress(ctx, address)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return db.Ptr(row.IdentityID), nil
 }
 
 // nullableString maps "" to NULL, so absent refs don't collide in the unique index on (loan_id, external_ref).

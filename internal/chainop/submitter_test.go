@@ -102,11 +102,14 @@ func TestSubmitRevertedTransaction(t *testing.T) {
 			return tx, nil
 		})
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "test transaction failed")
+	// A revert is permanent: the operation fails terminally instead of queueing for retry.
+	require.ErrorIs(t, err, ErrReverted)
+	require.NotErrorIs(t, err, ErrPending)
 	require.NotNil(t, journal.submitted)
 	require.Zero(t, journal.minedID)
-	require.NotNil(t, journal.retryable)
+	require.Nil(t, journal.retryable)
+	require.NotNil(t, journal.failed)
+	require.Equal(t, int64(42), journal.failed.ID)
 }
 
 func TestSubmitUsesUniqueHolderPerAcquisition(t *testing.T) {
@@ -140,7 +143,9 @@ func TestRetryableRecordsAndReturnsError(t *testing.T) {
 	cause := errors.New("boom")
 	err := submitter.Retryable(context.Background(), 42, cause)
 
-	require.Same(t, cause, err)
+	// The returned error matches ErrPending for 202 mapping while keeping the cause reachable.
+	require.ErrorIs(t, err, ErrPending)
+	require.ErrorIs(t, err, cause)
 	require.NotNil(t, journal.retryable)
 	require.Equal(t, int64(42), journal.retryable.ID)
 	require.Equal(t, "boom", *journal.retryable.Error)
@@ -268,6 +273,12 @@ type fakeJournal struct {
 	submitted *db.SetOperationSubmittedParams
 	minedID   int64
 	retryable *db.SetOperationRetryableParams
+	failed    *db.SetOperationFailedParams
+}
+
+func (f *fakeJournal) SetOperationFailed(_ context.Context, arg db.SetOperationFailedParams) (db.ChainOperation, error) {
+	f.failed = &arg
+	return db.ChainOperation{ID: arg.ID}, nil
 }
 
 func (f *fakeJournal) SetOperationSubmitted(_ context.Context, arg db.SetOperationSubmittedParams) (db.ChainOperation, error) {

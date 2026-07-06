@@ -24,6 +24,7 @@ const (
 	settleOperationKind        = "settle"
 	transferOperationKind      = "transfer"
 	markDefaultedOperationKind = "mark_defaulted"
+	grantRoleOperationKind     = "grant_role"
 )
 
 var (
@@ -34,6 +35,8 @@ var (
 	ErrLoanNotActive              = errors.New("loan is not active")
 	ErrLoanNotTransferable        = errors.New("loan is not transferable")
 	ErrNotNoteOwner               = errors.New("transfer requires the note owner's signature")
+	// ErrOperationPending reports a journaled chain write the platform will retry; handlers translate it to 202 with the affected resources.
+	ErrOperationPending = errors.New("chain operation pending; the platform will retry, poll the loan for progress")
 	ErrLoanMissingToken           = errors.New("loan is missing token id")
 	ErrLoanMissingContract        = errors.New("loan is missing contract")
 	ErrLoanOriginatedEventMissing = errors.New("loan originated event missing from receipt")
@@ -68,7 +71,7 @@ type Service struct {
 
 type OriginateRequest struct {
 	BorrowerRef string
-	// LenderAddress names an external lender wallet; LenderSubject names a custodial identity whose key is provisioned on demand.
+	// LenderAddress names an external lender wallet; LenderSubject names an onboarded custodial identity.
 	// Exactly one must be set.
 	LenderAddress  string
 	LenderSubject  string
@@ -77,6 +80,8 @@ type OriginateRequest struct {
 	TermDays       int64
 	// ContractID selects the loan series to originate into; nil means the chain's active contract.
 	ContractID *int64
+	// ExternalRef is the client's idempotency key: a retried request with the same ref returns the existing loan instead of minting a sibling.
+	ExternalRef string
 }
 
 type OriginateResult struct {
@@ -84,6 +89,8 @@ type OriginateResult struct {
 	LenderSubject string
 	OperationID   int64
 	TxHash        string
+	// Existing reports an idempotent replay: the loan already existed under the request's external_ref.
+	Existing bool
 }
 
 type RepaymentRequest struct {
@@ -204,6 +211,11 @@ func (s *Service) Loan(ctx context.Context, id int64) (db.Loan, error) {
 	return s.repo.Loan(ctx, id)
 }
 
+// Operation reads one chain operation, for servicer-side visibility into retries and failures.
+func (s *Service) Operation(ctx context.Context, id int64) (db.ChainOperation, error) {
+	return s.repo.Operation(ctx, id)
+}
+
 func (s *Service) Terms(ctx context.Context, id int64) (LoanTerms, error) {
 	loan, err := s.repo.Loan(ctx, id)
 	if err != nil {
@@ -222,6 +234,16 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 	terms, err := NewLoanTerms(req.PrincipalMinor, req.APRBps, req.TermDays)
 	if err != nil {
 		return OriginateResult{}, err
+	}
+
+	if req.ExternalRef != "" {
+		existing, err := s.repo.LoanByExternalRef(ctx, req.ExternalRef)
+		if err == nil {
+			return s.existingOriginationResult(existing), nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return OriginateResult{}, fmt.Errorf("look up external ref: %w", err)
+		}
 	}
 
 	var (
@@ -279,35 +301,72 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 		TermDays:         terms.TermDays,
 		InterestDueMinor: terms.InterestDueMinor,
 		TotalDueMinor:    terms.TotalDueMinor,
+		ExternalRef:      nullableString(req.ExternalRef),
 	})
+	if isUniqueViolation(err, "loans_external_ref_unique") {
+		// A concurrent request with the same idempotency key won the insert; replay theirs.
+		existing, getErr := s.repo.LoanByExternalRef(ctx, req.ExternalRef)
+		if getErr != nil {
+			return OriginateResult{}, fmt.Errorf("look up external ref after conflict: %w", getErr)
+		}
+		return s.existingOriginationResult(existing), nil
+	}
 	if err != nil {
 		return OriginateResult{}, err
 	}
 
+	applied, txHash, err := s.driveOrigination(ctx, loan, contract, op.ID)
+	if err != nil {
+		if errors.Is(err, chainop.ErrPending) {
+			return OriginateResult{Loan: loan, LenderSubject: lenderSubject, OperationID: op.ID}, fmt.Errorf("originate: %w", ErrOperationPending)
+		}
+		if errors.Is(err, chainop.ErrReverted) {
+			if failed, failErr := s.repo.FailLoan(ctx, loan.ID); failErr == nil {
+				loan = failed
+			}
+		}
+		return OriginateResult{Loan: loan, OperationID: op.ID}, err
+	}
+
+	return OriginateResult{Loan: applied, LenderSubject: lenderSubject, OperationID: op.ID, TxHash: txHash}, nil
+}
+
+func (s *Service) existingOriginationResult(loan db.Loan) OriginateResult {
+	result := OriginateResult{Loan: loan, Existing: true}
+	if loan.MintOperationID != nil {
+		result.OperationID = *loan.MintOperationID
+	}
+	return result
+}
+
+// driveOrigination performs the chain half of an origination from durable state: mint, parse the token id, apply.
+// The reconciler re-drives retryable originations through the same path, so everything it needs lives on the loan and contract rows.
+// Maturity is recomputed at mint time, so a re-driven origination matures TermDays from when it actually mints.
+func (s *Service) driveOrigination(ctx context.Context, loan db.Loan, contract db.Contract, opID int64) (db.Loan, string, error) {
 	metadataURI := fmt.Sprintf("%s%d/terms", contract.BaseUri, loan.ID)
+	lender := common.HexToAddress(loan.LenderAddress)
 
 	var note *contractpkg.LoanNote
-	txHash, receipt, err := s.submitOperation(ctx, op.ID, contract.Address, "originate",
+	txHash, receipt, err := s.submitOperation(ctx, opID, contract.Address, "originate",
 		func(auth *bind.TransactOpts, n *contractpkg.LoanNote) (*types.Transaction, error) {
 			note = n
-			maturity := uint64(time.Now().UTC().Add(time.Duration(terms.TermDays) * 24 * time.Hour).Unix())
-			return n.Originate(auth, lender, big.NewInt(terms.PrincipalMinor), terms.APRBps, maturity, metadataURI)
+			maturity := uint64(time.Now().UTC().Add(time.Duration(loan.TermDays) * 24 * time.Hour).Unix())
+			return n.Originate(auth, lender, big.NewInt(loan.PrincipalMinor), uint16(loan.AprBps), maturity, metadataURI)
 		})
 	if err != nil {
-		return OriginateResult{}, err
+		return loan, "", err
 	}
 
 	tokenID, err := parseOriginatedTokenID(note, receipt)
 	if err != nil {
-		return OriginateResult{}, s.submitter.Retryable(ctx, op.ID, err)
+		return loan, "", s.submitter.Retryable(ctx, opID, err)
 	}
 
-	loan, err = s.repo.ApplyOrigination(ctx, loan.ID, tokenID.String(), op.ID, contract.ID)
+	applied, err := s.repo.ApplyOrigination(ctx, loan.ID, tokenID.String(), opID, contract.ID)
 	if err != nil {
-		return OriginateResult{}, err
+		return loan, "", err
 	}
-
-	return OriginateResult{Loan: loan, LenderSubject: lenderSubject, OperationID: op.ID, TxHash: txHash}, nil
+	return applied, txHash, nil
 }
 
 func (s *Service) RecordRepayment(ctx context.Context, loanID int64, req RepaymentRequest) (RepaymentResult, error) {
@@ -331,6 +390,15 @@ func (s *Service) RecordRepayment(ctx context.Context, loanID int64, req Repayme
 
 	txHash, err := s.settle(ctx, txResult.Loan, txResult.SettlementOperation)
 	if err != nil {
+		if errors.Is(err, chainop.ErrPending) {
+			// The repayment is recorded; only the on-chain burn is still in flight.
+			return result, fmt.Errorf("settle: %w", ErrOperationPending)
+		}
+		if errors.Is(err, chainop.ErrReverted) {
+			if failed, failErr := s.repo.FailLoan(ctx, txResult.Loan.ID); failErr == nil {
+				result.Loan = failed
+			}
+		}
 		return result, err
 	}
 	loan, err := s.repo.ApplySettlement(ctx, txResult.Loan.ID, txResult.SettlementOperation.ID)
@@ -415,6 +483,11 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 			return note.SafeTransferFrom(auth, owner, to, tokenID)
 		})
 	if err != nil {
+		// Transfers are never re-driven: re-signing a user-initiated custody change later is the wrong default, so transient failures fail terminally and the lender re-requests.
+		if errors.Is(err, chainop.ErrPending) {
+			err = errors.Unwrap(err)
+			return TransferResult{}, s.submitter.Failed(ctx, op.ID, err)
+		}
 		return TransferResult{}, err
 	}
 
@@ -479,6 +552,9 @@ func (s *Service) Default(ctx context.Context, loanID int64) (DefaultResult, err
 			return note.MarkDefaulted(auth, tokenID)
 		})
 	if err != nil {
+		if errors.Is(err, chainop.ErrPending) {
+			return DefaultResult{Loan: loan, OperationID: op.ID}, fmt.Errorf("default: %w", ErrOperationPending)
+		}
 		return DefaultResult{}, err
 	}
 

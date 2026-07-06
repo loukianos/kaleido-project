@@ -131,6 +131,9 @@ func run(ctx context.Context) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	reconciler := loans.NewReconciler(loanService, lockManager, lockHolder, logger)
+	go reconciler.Run(ctx, time.Duration(cfg.ReconcileIntervalSeconds)*time.Second)
+
 	serverErrors := make(chan error, 1)
 	go func() {
 		logger.Info("starting API", "addr", server.Addr)

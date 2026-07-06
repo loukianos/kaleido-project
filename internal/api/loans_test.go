@@ -719,6 +719,8 @@ type fakeLoansService struct {
 	transferErr          error
 	loan                 db.Loan
 	loanErr              error
+	operation            db.ChainOperation
+	operationErr         error
 	defaultLoanID        int64
 	defaultResult        loans.DefaultResult
 	defaultErr           error
@@ -726,10 +728,8 @@ type fakeLoansService struct {
 
 func (f *fakeLoansService) Originate(_ context.Context, req loans.OriginateRequest) (loans.OriginateResult, error) {
 	f.request = req
-	if f.err != nil {
-		return loans.OriginateResult{}, f.err
-	}
-	return f.result, nil
+	// Pending semantics return the partial result alongside the error, so the fake does too.
+	return f.result, f.err
 }
 
 func (f *fakeLoansService) Get(_ context.Context, id int64) (loans.ReadResult, error) {
@@ -759,10 +759,7 @@ func (f *fakeLoansService) Terms(_ context.Context, id int64) (loans.LoanTerms, 
 func (f *fakeLoansService) RecordRepayment(_ context.Context, loanID int64, req loans.RepaymentRequest) (loans.RepaymentResult, error) {
 	f.repaymentLoanID = loanID
 	f.repaymentRequest = req
-	if f.repaymentErr != nil {
-		return loans.RepaymentResult{}, f.repaymentErr
-	}
-	return f.repaymentResult, nil
+	return f.repaymentResult, f.repaymentErr
 }
 
 func (f *fakeLoansService) ListRepayments(_ context.Context, loanID int64) ([]db.Repayment, error) {
@@ -790,10 +787,14 @@ func (f *fakeLoansService) Loan(_ context.Context, _ int64) (db.Loan, error) {
 	return f.loan, nil
 }
 
+func (f *fakeLoansService) Operation(_ context.Context, _ int64) (db.ChainOperation, error) {
+	if f.operationErr != nil {
+		return db.ChainOperation{}, f.operationErr
+	}
+	return f.operation, nil
+}
+
 func (f *fakeLoansService) Default(_ context.Context, loanID int64) (loans.DefaultResult, error) {
 	f.defaultLoanID = loanID
-	if f.defaultErr != nil {
-		return loans.DefaultResult{}, f.defaultErr
-	}
-	return f.defaultResult, nil
+	return f.defaultResult, f.defaultErr
 }
