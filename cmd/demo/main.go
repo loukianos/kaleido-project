@@ -131,6 +131,57 @@ func run() error {
 		return err
 	}
 
+	// Custodial lenders: the note is minted to a per-identity key provisioned on first sight, and transfers are signed by the owning lender's key, not the platform's.
+	fmt.Println("Originating loan note for custodial lender alice")
+	var custodialLoan struct {
+		ID            int64  `json:"id"`
+		LenderAddress string `json:"lender_address"`
+		LenderSubject string `json:"lender_subject"`
+		TotalDueMinor int64  `json:"total_due_minor"`
+	}
+	err = api.post("/loans", map[string]any{
+		"borrower_ref":    fmt.Sprintf("demo-custodial-%d", time.Now().Unix()),
+		"lender_subject":  "alice",
+		"principal_minor": 20000,
+		"apr_bps":         300,
+		"term_days":       60,
+	}, &custodialLoan)
+	if err != nil {
+		return err
+	}
+	if custodialLoan.LenderSubject != "alice" {
+		return fmt.Errorf("custodial loan lender subject is %q, want alice", custodialLoan.LenderSubject)
+	}
+	if strings.EqualFold(custodialLoan.LenderAddress, info.SignerAddress) {
+		return errors.New("alice's custodial address must differ from the platform signer")
+	}
+
+	fmt.Printf("Transferring loan %d from alice to bob (signed by alice's custodial key)\n", custodialLoan.ID)
+	var custodialTransfer struct {
+		LenderSubject string `json:"lender_subject"`
+		LenderAddress string `json:"lender_address"`
+	}
+	if err := api.post(fmt.Sprintf("/loans/%d/transfer", custodialLoan.ID), map[string]any{"to_subject": "bob"}, &custodialTransfer); err != nil {
+		return err
+	}
+	if custodialTransfer.LenderSubject != "bob" {
+		return fmt.Errorf("transferred loan lender subject is %q, want bob", custodialTransfer.LenderSubject)
+	}
+
+	fmt.Printf("Transferring loan %d back to alice (signed by bob's custodial key)\n", custodialLoan.ID)
+	if err := api.post(fmt.Sprintf("/loans/%d/transfer", custodialLoan.ID), map[string]any{"to_subject": "alice"}, nil); err != nil {
+		return err
+	}
+
+	fmt.Printf("Repaying loan %d\n", custodialLoan.ID)
+	err = api.post(fmt.Sprintf("/loans/%d/repayments", custodialLoan.ID), map[string]any{
+		"amount_minor": custodialLoan.TotalDueMinor,
+		"external_ref": fmt.Sprintf("demo-custodial-final-%d", custodialLoan.ID),
+	}, nil)
+	if err != nil {
+		return err
+	}
+
 	// Each contract instance is its own loan series; originations select one by contract_id.
 	fmt.Println("Deploying a second loan series (non-default contract)")
 	var series struct {

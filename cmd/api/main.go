@@ -16,6 +16,8 @@ import (
 	"kaleido-project/internal/config"
 	"kaleido-project/internal/contracts"
 	"kaleido-project/internal/eth"
+	"kaleido-project/internal/identity"
+	"kaleido-project/internal/keys"
 	"kaleido-project/internal/loans"
 )
 
@@ -69,8 +71,13 @@ func run(ctx context.Context) error {
 		cfg.LoanBaseURI,
 		lockHolder,
 	)
+	encryptor, err := keys.NewAESGCM(cfg.KeyEncryptionMasterKey)
+	if err != nil {
+		return fmt.Errorf("initialize key encryptor: %w", err)
+	}
+	identityService := identity.NewService(queries, encryptor)
 	loanRepo := loans.NewRepository(queries, conn)
-	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder)
+	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder, identityService)
 
 	server := &http.Server{
 		Addr: ":" + cfg.Port,

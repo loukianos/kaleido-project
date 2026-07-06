@@ -16,6 +16,7 @@ import (
 	"kaleido-project/internal/chainop"
 	contractpkg "kaleido-project/internal/contracts"
 	"kaleido-project/internal/eth"
+	"kaleido-project/internal/identity"
 )
 
 const (
@@ -28,6 +29,8 @@ const (
 var (
 	ErrNoActiveContract           = errors.New("no active contract deployed for this chain")
 	ErrInvalidAddress             = errors.New("invalid ethereum address")
+	ErrInvalidLender              = errors.New("exactly one of lender_address and lender_subject is required")
+	ErrInvalidTransferTarget      = errors.New("exactly one of to_address and to_subject is required")
 	ErrLoanNotActive              = errors.New("loan is not active")
 	ErrLoanNotTransferable        = errors.New("loan is not transferable")
 	ErrNotNoteOwner               = errors.New("transfer requires the note owner's signature")
@@ -37,15 +40,26 @@ var (
 	ErrDuplicateExternalRef       = errors.New("repayment with this external ref already recorded")
 )
 
+// IdentityResolver maps subjects to custodial identities and signing keys; identity.Service satisfies it.
+type IdentityResolver interface {
+	ResolveLender(ctx context.Context, subject string) (db.Identity, *eth.Signer, error)
+	SignerForAddress(ctx context.Context, address common.Address) (*eth.Signer, error)
+	Identity(ctx context.Context, id int64) (db.Identity, error)
+}
+
 type Service struct {
-	repo      *Repository
-	chain     eth.Writer
-	submitter *chainop.Submitter
+	repo       *Repository
+	chain      eth.Writer
+	submitter  *chainop.Submitter
+	identities IdentityResolver
 }
 
 type OriginateRequest struct {
-	BorrowerRef    string
+	BorrowerRef string
+	// LenderAddress names an external lender wallet; LenderSubject names a custodial identity whose key is provisioned on demand.
+	// Exactly one must be set.
 	LenderAddress  string
+	LenderSubject  string
 	PrincipalMinor int64
 	APRBps         uint16
 	TermDays       int64
@@ -54,9 +68,10 @@ type OriginateRequest struct {
 }
 
 type OriginateResult struct {
-	Loan        db.Loan
-	OperationID int64
-	TxHash      string
+	Loan          db.Loan
+	LenderSubject string
+	OperationID   int64
+	TxHash        string
 }
 
 type RepaymentRequest struct {
@@ -72,13 +87,17 @@ type RepaymentResult struct {
 }
 
 type TransferRequest struct {
+	// ToAddress names an external wallet; ToSubject names a custodial identity whose key is provisioned on demand.
+	// Exactly one must be set.
 	ToAddress string
+	ToSubject string
 }
 
 type TransferResult struct {
-	Loan        db.Loan
-	OperationID int64
-	TxHash      string
+	Loan          db.Loan
+	LenderSubject string
+	OperationID   int64
+	TxHash        string
 }
 
 type DefaultResult struct {
@@ -88,9 +107,10 @@ type DefaultResult struct {
 }
 
 type ReadResult struct {
-	Loan         db.Loan
-	OwnerAddress string
-	MintTxHash   string
+	Loan          db.Loan
+	LenderSubject string
+	OwnerAddress  string
+	MintTxHash    string
 }
 
 type ListRequest struct {
@@ -100,11 +120,12 @@ type ListRequest struct {
 	Offset int32
 }
 
-func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string) *Service {
+func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string, identities IdentityResolver) *Service {
 	return &Service{
-		repo:      repo,
-		chain:     chain,
-		submitter: chainop.NewSubmitter(chain, locks, lockHolder, repo),
+		repo:       repo,
+		chain:      chain,
+		submitter:  chainop.NewSubmitter(chain, locks, lockHolder, repo),
+		identities: identities,
 	}
 }
 
@@ -132,6 +153,14 @@ func (s *Service) Get(ctx context.Context, id int64) (ReadResult, error) {
 			return ReadResult{}, err
 		}
 		result.OwnerAddress = owner.Hex()
+	}
+
+	if loan.LenderIdentityID != nil {
+		ident, err := s.identities.Identity(ctx, *loan.LenderIdentityID)
+		if err != nil {
+			return ReadResult{}, fmt.Errorf("get lender identity: %w", err)
+		}
+		result.LenderSubject = ident.Subject
 	}
 	return result, nil
 }
@@ -167,9 +196,28 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 	if err != nil {
 		return OriginateResult{}, err
 	}
-	lender, err := parseAddress(req.LenderAddress)
-	if err != nil {
-		return OriginateResult{}, err
+
+	var (
+		lender           common.Address
+		lenderIdentityID *int64
+		lenderSubject    string
+	)
+	switch {
+	case req.LenderSubject != "" && req.LenderAddress != "", req.LenderSubject == "" && req.LenderAddress == "":
+		return OriginateResult{}, ErrInvalidLender
+	case req.LenderSubject != "":
+		ident, signer, err := s.identities.ResolveLender(ctx, req.LenderSubject)
+		if err != nil {
+			return OriginateResult{}, fmt.Errorf("resolve lender identity: %w", err)
+		}
+		lender = signer.Address()
+		lenderIdentityID = db.Ptr(ident.ID)
+		lenderSubject = ident.Subject
+	default:
+		lender, err = parseAddress(req.LenderAddress)
+		if err != nil {
+			return OriginateResult{}, err
+		}
 	}
 
 	var contract db.Contract
@@ -198,6 +246,7 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 		ContractID:       contract.ID,
 		BorrowerRef:      req.BorrowerRef,
 		LenderAddress:    lender.Hex(),
+		LenderIdentityID: lenderIdentityID,
 		PrincipalMinor:   terms.PrincipalMinor,
 		APRBps:           int32(terms.APRBps),
 		TermDays:         terms.TermDays,
@@ -231,7 +280,7 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 		return OriginateResult{}, err
 	}
 
-	return OriginateResult{Loan: loan, OperationID: op.ID, TxHash: txHash}, nil
+	return OriginateResult{Loan: loan, LenderSubject: lenderSubject, OperationID: op.ID, TxHash: txHash}, nil
 }
 
 func (s *Service) RecordRepayment(ctx context.Context, loanID int64, req RepaymentRequest) (RepaymentResult, error) {
@@ -274,9 +323,28 @@ func (s *Service) ListRepayments(ctx context.Context, loanID int64) ([]db.Repaym
 }
 
 func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferRequest) (TransferResult, error) {
-	to, err := parseAddress(req.ToAddress)
-	if err != nil {
-		return TransferResult{}, err
+	var (
+		to           common.Address
+		toIdentityID *int64
+		toSubject    string
+	)
+	switch {
+	case req.ToSubject != "" && req.ToAddress != "", req.ToSubject == "" && req.ToAddress == "":
+		return TransferResult{}, ErrInvalidTransferTarget
+	case req.ToSubject != "":
+		ident, signer, err := s.identities.ResolveLender(ctx, req.ToSubject)
+		if err != nil {
+			return TransferResult{}, fmt.Errorf("resolve transfer target identity: %w", err)
+		}
+		to = signer.Address()
+		toIdentityID = db.Ptr(ident.ID)
+		toSubject = ident.Subject
+	default:
+		var err error
+		to, err = parseAddress(req.ToAddress)
+		if err != nil {
+			return TransferResult{}, err
+		}
 	}
 
 	loan, err := s.repo.Loan(ctx, loanID)
@@ -295,13 +363,21 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	}
 
 	// Transfers are owner-signed ERC-721 transferFrom: the contract has no admin path to move a note.
-	// Until per-identity lender keys exist, the platform key is the only signer, so the API can only transfer notes the platform itself holds (e.g. warehouse originations to its own address).
+	// The signer is whoever holds the note: a custodial lender's key when we custody it, the platform key for warehouse notes.
+	// Externally held notes can't be moved by the API at all; their owner transfers on-chain directly.
 	owner, err := s.ownerOf(ctx, loan)
 	if err != nil {
 		return TransferResult{}, err
 	}
-	if owner != s.chain.SignerAddress() {
-		return TransferResult{}, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+	signer := s.chain.DefaultSigner()
+	if owner != signer.Address() {
+		signer, err = s.identities.SignerForAddress(ctx, owner)
+		if errors.Is(err, identity.ErrNoCustodialKey) {
+			return TransferResult{}, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+		}
+		if err != nil {
+			return TransferResult{}, fmt.Errorf("resolve owner signer: %w", err)
+		}
 	}
 
 	op, err := s.repo.CreateLoanOperation(ctx, transferOperationKind, contract.ID, loan.ID)
@@ -313,7 +389,7 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	if err != nil {
 		return TransferResult{}, s.submitter.Retryable(ctx, op.ID, err)
 	}
-	txHash, _, err := s.submitOperation(ctx, op.ID, contract.Address, "transfer",
+	txHash, _, err := s.submitOperationAs(ctx, signer, op.ID, contract.Address, "transfer",
 		func(auth *bind.TransactOpts, note *contractpkg.LoanNote) (*types.Transaction, error) {
 			return note.SafeTransferFrom(auth, owner, to, tokenID)
 		})
@@ -321,12 +397,12 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 		return TransferResult{}, err
 	}
 
-	loan, err = s.repo.ApplyTransfer(ctx, loan.ID, to.Hex(), op.ID)
+	loan, err = s.repo.ApplyTransfer(ctx, loan.ID, to.Hex(), toIdentityID, op.ID)
 	if err != nil {
 		return TransferResult{}, err
 	}
 
-	return TransferResult{Loan: loan, OperationID: op.ID, TxHash: txHash}, nil
+	return TransferResult{Loan: loan, LenderSubject: toSubject, OperationID: op.ID, TxHash: txHash}, nil
 }
 
 func (s *Service) Default(ctx context.Context, loanID int64) (DefaultResult, error) {
@@ -390,7 +466,7 @@ func (s *Service) settle(ctx context.Context, loan db.Loan, op db.ChainOperation
 	return txHash, err
 }
 
-// submitOperation performs a single write against the loan-note contract at contractAddress, binding the contract and delegating the tracked submission to the shared chainop submitter.
+// submitOperation performs a single platform-signed write against the loan-note contract at contractAddress.
 func (s *Service) submitOperation(
 	ctx context.Context,
 	opID int64,
@@ -398,7 +474,19 @@ func (s *Service) submitOperation(
 	action string,
 	send func(*bind.TransactOpts, *contractpkg.LoanNote) (*types.Transaction, error),
 ) (string, *types.Receipt, error) {
-	return s.submitter.Submit(ctx, opID, action,
+	return s.submitOperationAs(ctx, s.chain.DefaultSigner(), opID, contractAddress, action, send)
+}
+
+// submitOperationAs performs a single write signed by signer, binding the contract and delegating the tracked submission to the shared chainop submitter.
+func (s *Service) submitOperationAs(
+	ctx context.Context,
+	signer *eth.Signer,
+	opID int64,
+	contractAddress string,
+	action string,
+	send func(*bind.TransactOpts, *contractpkg.LoanNote) (*types.Transaction, error),
+) (string, *types.Receipt, error) {
+	return s.submitter.SubmitAs(ctx, signer, opID, action,
 		func(auth *bind.TransactOpts, backend eth.ContractBackend) (*types.Transaction, error) {
 			note, err := contractpkg.NewLoanNote(common.HexToAddress(contractAddress), backend)
 			if err != nil {

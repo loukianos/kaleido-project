@@ -13,6 +13,7 @@ import (
 
 	db "kaleido-project/db/sqlc"
 	contractspkg "kaleido-project/internal/contracts"
+	"kaleido-project/internal/identity"
 	"kaleido-project/internal/loans"
 )
 
@@ -28,8 +29,10 @@ type LoansService interface {
 }
 
 type createLoanRequest struct {
-	BorrowerRef    string `json:"borrower_ref"`
-	LenderAddress  string `json:"lender_address"`
+	BorrowerRef string `json:"borrower_ref"`
+	// Exactly one of lender_address (external wallet) and lender_subject (custodial identity) is required.
+	LenderAddress  string `json:"lender_address,omitempty"`
+	LenderSubject  string `json:"lender_subject,omitempty"`
 	PrincipalMinor int64  `json:"principal_minor"`
 	APRBps         uint16 `json:"apr_bps"`
 	TermDays       int64  `json:"term_days"`
@@ -56,14 +59,15 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 			c.JSON(http.StatusBadRequest, errorBody("invalid json body"))
 			return
 		}
-		if req.BorrowerRef == "" || req.LenderAddress == "" {
-			c.JSON(http.StatusBadRequest, errorBody("borrower_ref and lender_address are required"))
+		if req.BorrowerRef == "" {
+			c.JSON(http.StatusBadRequest, errorBody("borrower_ref is required"))
 			return
 		}
 
 		result, err := service.Originate(c.Request.Context(), loans.OriginateRequest{
 			BorrowerRef:    req.BorrowerRef,
 			LenderAddress:  req.LenderAddress,
+			LenderSubject:  req.LenderSubject,
 			PrincipalMinor: req.PrincipalMinor,
 			APRBps:         req.APRBps,
 			TermDays:       req.TermDays,
@@ -78,7 +82,9 @@ func handleCreateLoan(logger *slog.Logger, service LoansService) gin.HandlerFunc
 			return
 		}
 
-		c.JSON(http.StatusCreated, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
+		response := loanResponseWithTx(result.Loan, result.OperationID, result.TxHash)
+		response.LenderSubject = result.LenderSubject
+		c.JSON(http.StatusCreated, response)
 	}
 }
 
@@ -205,7 +211,9 @@ func handleLoanTerms(logger *slog.Logger, service LoansService) gin.HandlerFunc 
 }
 
 type transferLoanRequest struct {
-	ToAddress string `json:"to_address"`
+	// Exactly one of to_address (external wallet) and to_subject (custodial identity) is required.
+	ToAddress string `json:"to_address,omitempty"`
+	ToSubject string `json:"to_subject,omitempty"`
 }
 
 // handleTransferLoan reassigns the note to a new lender on chain.
@@ -235,7 +243,7 @@ func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFu
 			return
 		}
 
-		result, err := service.Transfer(c.Request.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress})
+		result, err := service.Transfer(c.Request.Context(), id, loans.TransferRequest{ToAddress: req.ToAddress, ToSubject: req.ToSubject})
 		if err != nil {
 			if writeLoanError(c, err) {
 				return
@@ -245,7 +253,9 @@ func handleTransferLoan(logger *slog.Logger, service LoansService) gin.HandlerFu
 			return
 		}
 
-		c.JSON(http.StatusOK, loanResponseWithTx(result.Loan, result.OperationID, result.TxHash))
+		response := loanResponseWithTx(result.Loan, result.OperationID, result.TxHash)
+		response.LenderSubject = result.LenderSubject
+		c.JSON(http.StatusOK, response)
 	}
 }
 
@@ -380,6 +390,7 @@ type loanResponse struct {
 	ContractID       int64  `json:"contract_id,omitempty"`
 	BorrowerRef      string `json:"borrower_ref"`
 	LenderAddress    string `json:"lender_address"`
+	LenderSubject    string `json:"lender_subject,omitempty"`
 	PrincipalMinor   int64  `json:"principal_minor"`
 	APRBps           int32  `json:"apr_bps"`
 	TermDays         int64  `json:"term_days"`
@@ -431,6 +442,7 @@ func loanResponseFromRead(result loans.ReadResult) loanResponse {
 	}
 	response.TxHash = result.MintTxHash
 	response.OwnerAddress = result.OwnerAddress
+	response.LenderSubject = result.LenderSubject
 	return response
 }
 
@@ -489,6 +501,9 @@ func writeLoanError(c *gin.Context, err error) bool {
 	case errors.Is(err, loans.ErrInvalidAmount),
 		errors.Is(err, loans.ErrInvalidTerm),
 		errors.Is(err, loans.ErrInvalidAddress),
+		errors.Is(err, loans.ErrInvalidLender),
+		errors.Is(err, loans.ErrInvalidTransferTarget),
+		errors.Is(err, identity.ErrInvalidSubject),
 		errors.Is(err, loans.ErrOverpayment):
 		c.JSON(http.StatusBadRequest, errorBody(err.Error()))
 	case errors.Is(err, loans.ErrLoanNotActive),

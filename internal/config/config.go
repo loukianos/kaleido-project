@@ -9,24 +9,30 @@ import (
 	"strings"
 
 	"kaleido-project/internal/eth"
+	"kaleido-project/internal/keys"
 )
 
+// devKeyEncryptionMasterKey is a throwaway dev default matching .env.example, like the deployer key.
+const devKeyEncryptionMasterKey = "6a006ea1d0bfd421d93890dfe78ec0fb16e74a9818e5a097a5d5cc0f62693051"
+
 type Config struct {
-	Port               string
-	EthRPCURL          string
-	ChainID            int64
-	DatabaseURL        string
-	LoanBaseURI        string
-	DeployerPrivateKey string
+	Port                   string
+	EthRPCURL              string
+	ChainID                int64
+	DatabaseURL            string
+	LoanBaseURI            string
+	DeployerPrivateKey     string
+	KeyEncryptionMasterKey string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Port:               getenv("PORT", "8080"),
-		EthRPCURL:          getenv("ETH_RPC_URL", "http://127.0.0.1:31545"),
-		DatabaseURL:        getenv("DATABASE_URL", "postgres://loan_notes:loan_notes@127.0.0.1:5432/loan_notes?sslmode=disable"),
-		LoanBaseURI:        getenv("LOAN_BASE_URI", "http://localhost:8080/loans/"),
-		DeployerPrivateKey: os.Getenv("DEPLOYER_PRIVATE_KEY"),
+		Port:                   getenv("PORT", "8080"),
+		EthRPCURL:              getenv("ETH_RPC_URL", "http://127.0.0.1:31545"),
+		DatabaseURL:            getenv("DATABASE_URL", "postgres://loan_notes:loan_notes@127.0.0.1:5432/loan_notes?sslmode=disable"),
+		LoanBaseURI:            getenv("LOAN_BASE_URI", "http://localhost:8080/loans/"),
+		DeployerPrivateKey:     os.Getenv("DEPLOYER_PRIVATE_KEY"),
+		KeyEncryptionMasterKey: getenv("KEY_ENCRYPTION_MASTER_KEY", devKeyEncryptionMasterKey),
 	}
 
 	chainID, err := parseChainID(getenv("CHAIN_ID", "1337"))
@@ -62,6 +68,9 @@ func (c Config) validate() error {
 			return fmt.Errorf("DEPLOYER_PRIVATE_KEY is invalid: %w", err)
 		}
 	}
+	if _, err := keys.NewAESGCM(c.KeyEncryptionMasterKey); err != nil {
+		return fmt.Errorf("KEY_ENCRYPTION_MASTER_KEY is invalid: %w", err)
+	}
 	return nil
 }
 
@@ -75,6 +84,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("loan_base_uri", c.LoanBaseURI),
 		// Redact private kkey but log whether it's set
 		slog.Bool("deployer_key_set", c.DeployerPrivateKey != ""),
+		// Redact master key but log whether it's set
+		slog.Bool("key_encryption_master_key_set", c.KeyEncryptionMasterKey != ""),
 	)
 }
 

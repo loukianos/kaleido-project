@@ -21,6 +21,7 @@ type CreateOriginationParams struct {
 	ContractID       int64
 	BorrowerRef      string
 	LenderAddress    string
+	LenderIdentityID *int64
 	PrincipalMinor   int64
 	APRBps           int32
 	TermDays         int64
@@ -81,6 +82,7 @@ func (r *Repository) CreateOrigination(ctx context.Context, params CreateOrigina
 		loan, err = q.CreateLoan(ctx, db.CreateLoanParams{
 			BorrowerRef:      params.BorrowerRef,
 			LenderAddress:    params.LenderAddress,
+			LenderIdentityID: params.LenderIdentityID,
 			PrincipalMinor:   params.PrincipalMinor,
 			AprBps:           params.APRBps,
 			TermDays:         params.TermDays,
@@ -214,13 +216,14 @@ func (r *Repository) ApplyDefault(ctx context.Context, loanID int64, opID int64)
 	return r.setLoanStatusAndApplyOperation(ctx, loanID, LoanStatusDefaulted, opID, "default")
 }
 
-func (r *Repository) ApplyTransfer(ctx context.Context, loanID int64, lenderAddress string, opID int64) (db.Loan, error) {
+func (r *Repository) ApplyTransfer(ctx context.Context, loanID int64, lenderAddress string, lenderIdentityID *int64, opID int64) (db.Loan, error) {
 	var loan db.Loan
 	err := db.WithTx(ctx, r.db, r.queries, func(q *db.Queries) error {
 		var err error
 		loan, err = q.UpdateLoanLender(ctx, db.UpdateLoanLenderParams{
-			ID:            loanID,
-			LenderAddress: lenderAddress,
+			ID:               loanID,
+			LenderAddress:    lenderAddress,
+			LenderIdentityID: lenderIdentityID,
 		})
 		if err != nil {
 			return fmt.Errorf("update loan lender: %w", err)
