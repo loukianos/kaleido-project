@@ -146,22 +146,25 @@ const listLoans = `-- name: ListLoans :many
 SELECT id, token_id, contract_id, borrower_ref, lender_address, principal_minor, apr_bps, term_days, interest_due_minor, total_due_minor, outstanding_minor, status, mint_operation_id, created_at, updated_at, lender_identity_id
 FROM loans
 WHERE ($1::text = '' OR lower(lender_address) = lower($1::text))
-  AND ($2::text = '' OR status = $2::text)
+  AND ($2::bigint = 0 OR lender_identity_id = $2::bigint)
+  AND ($3::text = '' OR status = $3::text)
 ORDER BY id DESC
-LIMIT $4
-OFFSET $3
+LIMIT $5
+OFFSET $4
 `
 
 type ListLoansParams struct {
-	Lender      string
-	Status      string
-	OffsetCount int32
-	LimitCount  int32
+	Lender           string
+	LenderIdentityID int64
+	Status           string
+	OffsetCount      int32
+	LimitCount       int32
 }
 
 func (q *Queries) ListLoans(ctx context.Context, arg ListLoansParams) ([]Loan, error) {
 	rows, err := q.db.Query(ctx, listLoans,
 		arg.Lender,
+		arg.LenderIdentityID,
 		arg.Status,
 		arg.OffsetCount,
 		arg.LimitCount,

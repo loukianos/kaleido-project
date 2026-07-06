@@ -41,6 +41,7 @@ type deployContractRequest struct {
 //	@Success		201		{object}	contractResponse
 //	@Failure		400		{object}	errorResponse	"Invalid JSON body"
 //	@Failure		503		{object}	errorResponse	"Another chain operation is in progress, retry shortly"
+//	@Security		BearerAuth
 //	@Router			/admin/contracts/deploy [post]
 func handleDeployContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -73,6 +74,7 @@ func handleDeployContract(logger *slog.Logger, contracts ContractsService) gin.H
 //	@Produce	json
 //	@Success	200	{object}	contractResponse
 //	@Failure	404	{object}	errorResponse
+//	@Security	BearerAuth
 //	@Router		/contracts/active [get]
 func handleActiveContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -96,6 +98,7 @@ func handleActiveContract(logger *slog.Logger, contracts ContractsService) gin.H
 //	@Tags		contracts
 //	@Produce	json
 //	@Success	200	{object}	contractsListResponse
+//	@Security	BearerAuth
 //	@Router		/contracts [get]
 func handleListContracts(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -122,6 +125,7 @@ func handleListContracts(logger *slog.Logger, contracts ContractsService) gin.Ha
 //	@Success	200	{object}	contractResponse
 //	@Failure	400	{object}	errorResponse
 //	@Failure	404	{object}	errorResponse
+//	@Security	BearerAuth
 //	@Router		/contracts/{id} [get]
 func handleGetContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -153,6 +157,7 @@ func handleGetContract(logger *slog.Logger, contracts ContractsService) gin.Hand
 //	@Success		200	{object}	contractResponse
 //	@Failure		400	{object}	errorResponse
 //	@Failure		404	{object}	errorResponse
+//	@Security		BearerAuth
 //	@Router			/admin/contracts/{id}/activate [post]
 func handleActivateContract(logger *slog.Logger, contracts ContractsService) gin.HandlerFunc {
 	return func(c *gin.Context) {

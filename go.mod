@@ -3,8 +3,10 @@ module kaleido-project
 go 1.26.4
 
 require (
+	github.com/coreos/go-oidc/v3 v3.19.0
 	github.com/ethereum/go-ethereum v1.17.4
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pressly/goose/v3 v3.27.2
@@ -85,6 +87,7 @@ require (
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

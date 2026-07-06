@@ -42,6 +42,7 @@ FOR UPDATE;
 SELECT *
 FROM loans
 WHERE (@lender::text = '' OR lower(lender_address) = lower(@lender::text))
+  AND (@lender_identity_id::bigint = 0 OR lender_identity_id = @lender_identity_id::bigint)
   AND (@status::text = '' OR status = @status::text)
 ORDER BY id DESC
 LIMIT @limit_count

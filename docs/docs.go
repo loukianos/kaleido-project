@@ -36,6 +36,11 @@ const docTemplate = `{
         },
         "/admin/contracts/deploy": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Deploys a new LoanNote contract instance; each instance is its own loan series. The chain's first contract becomes the origination default; later deploys only take over the default when activate is true.",
                 "consumes": [
                     "application/json"
@@ -81,6 +86,11 @@ const docTemplate = `{
         },
         "/admin/contracts/{id}/activate": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Makes the contract the default for new originations, replacing the current default.",
                 "produces": [
                     "application/json"
@@ -122,6 +132,11 @@ const docTemplate = `{
         },
         "/contracts": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -141,6 +156,11 @@ const docTemplate = `{
         },
         "/contracts/active": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -166,6 +186,11 @@ const docTemplate = `{
         },
         "/contracts/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -225,6 +250,11 @@ const docTemplate = `{
         },
         "/loans": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -285,6 +315,11 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -336,6 +371,11 @@ const docTemplate = `{
         },
         "/loans/{id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -370,6 +410,11 @@ const docTemplate = `{
         },
         "/loans/{id}/default": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -416,6 +461,11 @@ const docTemplate = `{
         },
         "/loans/{id}/repayments": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -448,6 +498,11 @@ const docTemplate = `{
                 }
             },
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -512,6 +567,11 @@ const docTemplate = `{
         },
         "/loans/{id}/terms": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -546,6 +606,11 @@ const docTemplate = `{
         },
         "/loans/{id}/transfer": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "consumes": [
                     "application/json"
                 ],
@@ -583,6 +648,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Caller does not own the note",
                         "schema": {
                             "$ref": "#/definitions/api.errorResponse"
                         }
@@ -917,6 +988,14 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "OIDC bearer token, sent as \"Bearer \u003ctoken\u003e\"",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     }
 }`

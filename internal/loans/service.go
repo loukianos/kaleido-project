@@ -42,9 +42,16 @@ var (
 
 // IdentityResolver maps subjects to custodial identities and signing keys; identity.Service satisfies it.
 type IdentityResolver interface {
-	ResolveLender(ctx context.Context, subject string) (db.Identity, *eth.Signer, error)
-	SignerForAddress(ctx context.Context, address common.Address) (*eth.Signer, error)
+	ResolveLender(ctx context.Context, issuer, subject string) (db.Identity, *eth.Signer, error)
+	SignerForIdentity(ctx context.Context, identityID int64) (*eth.Signer, error)
 	Identity(ctx context.Context, id int64) (db.Identity, error)
+}
+
+// Caller is the authenticated principal a handler resolved, as the loans domain sees it.
+type Caller struct {
+	// IdentityID is the caller's lender identity; zero when the caller is the servicer.
+	IdentityID int64
+	Servicer   bool
 }
 
 type Service struct {
@@ -52,6 +59,8 @@ type Service struct {
 	chain      eth.Writer
 	submitter  *chainop.Submitter
 	identities IdentityResolver
+	// issuer qualifies subjects named in request bodies; authenticated callers carry their own issuer, and the API accepts a single one.
+	issuer string
 }
 
 type OriginateRequest struct {
@@ -115,17 +124,20 @@ type ReadResult struct {
 
 type ListRequest struct {
 	Lender string
-	Status string
-	Limit  int32
-	Offset int32
+	// LenderIdentityID scopes the list to one lender's loans; zero means unscoped (servicer view).
+	LenderIdentityID int64
+	Status           string
+	Limit            int32
+	Offset           int32
 }
 
-func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string, identities IdentityResolver) *Service {
+func NewService(repo *Repository, chain eth.Writer, locks *db.LockManager, lockHolder string, identities IdentityResolver, issuer string) *Service {
 	return &Service{
 		repo:       repo,
 		chain:      chain,
 		submitter:  chainop.NewSubmitter(chain, locks, lockHolder, repo),
 		identities: identities,
+		issuer:     issuer,
 	}
 }
 
@@ -170,11 +182,17 @@ func (s *Service) List(ctx context.Context, req ListRequest) ([]db.Loan, error) 
 		req.Limit = 50
 	}
 	return s.repo.ListLoans(ctx, db.ListLoansParams{
-		Lender:      req.Lender,
-		Status:      req.Status,
-		LimitCount:  req.Limit,
-		OffsetCount: req.Offset,
+		Lender:           req.Lender,
+		LenderIdentityID: req.LenderIdentityID,
+		Status:           req.Status,
+		LimitCount:       req.Limit,
+		OffsetCount:      req.Offset,
 	})
+}
+
+// Loan reads the bare loan row, for authorization checks that don't need the chain-decorated view.
+func (s *Service) Loan(ctx context.Context, id int64) (db.Loan, error) {
+	return s.repo.Loan(ctx, id)
 }
 
 func (s *Service) Terms(ctx context.Context, id int64) (LoanTerms, error) {
@@ -206,7 +224,7 @@ func (s *Service) Originate(ctx context.Context, req OriginateRequest) (Originat
 	case req.LenderSubject != "" && req.LenderAddress != "", req.LenderSubject == "" && req.LenderAddress == "":
 		return OriginateResult{}, ErrInvalidLender
 	case req.LenderSubject != "":
-		ident, signer, err := s.identities.ResolveLender(ctx, req.LenderSubject)
+		ident, signer, err := s.identities.ResolveLender(ctx, s.issuer, req.LenderSubject)
 		if err != nil {
 			return OriginateResult{}, fmt.Errorf("resolve lender identity: %w", err)
 		}
@@ -322,7 +340,7 @@ func (s *Service) ListRepayments(ctx context.Context, loanID int64) ([]db.Repaym
 	return s.repo.Repayments(ctx, loanID)
 }
 
-func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferRequest) (TransferResult, error) {
+func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferRequest, caller Caller) (TransferResult, error) {
 	var (
 		to           common.Address
 		toIdentityID *int64
@@ -332,7 +350,7 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	case req.ToSubject != "" && req.ToAddress != "", req.ToSubject == "" && req.ToAddress == "":
 		return TransferResult{}, ErrInvalidTransferTarget
 	case req.ToSubject != "":
-		ident, signer, err := s.identities.ResolveLender(ctx, req.ToSubject)
+		ident, signer, err := s.identities.ResolveLender(ctx, s.issuer, req.ToSubject)
 		if err != nil {
 			return TransferResult{}, fmt.Errorf("resolve transfer target identity: %w", err)
 		}
@@ -363,21 +381,15 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	}
 
 	// Transfers are owner-signed ERC-721 transferFrom: the contract has no admin path to move a note.
-	// The signer is whoever holds the note: a custodial lender's key when we custody it, the platform key for warehouse notes.
+	// The caller must be the note's owner: a lender signs with their custodial key, and the servicer signs with the platform key for warehouse notes it holds.
 	// Externally held notes can't be moved by the API at all; their owner transfers on-chain directly.
 	owner, err := s.ownerOf(ctx, loan)
 	if err != nil {
 		return TransferResult{}, err
 	}
-	signer := s.chain.DefaultSigner()
-	if owner != signer.Address() {
-		signer, err = s.identities.SignerForAddress(ctx, owner)
-		if errors.Is(err, identity.ErrNoCustodialKey) {
-			return TransferResult{}, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
-		}
-		if err != nil {
-			return TransferResult{}, fmt.Errorf("resolve owner signer: %w", err)
-		}
+	signer, err := s.transferSigner(ctx, caller, owner)
+	if err != nil {
+		return TransferResult{}, err
 	}
 
 	op, err := s.repo.CreateLoanOperation(ctx, transferOperationKind, contract.ID, loan.ID)
@@ -403,6 +415,29 @@ func (s *Service) Transfer(ctx context.Context, loanID int64, req TransferReques
 	}
 
 	return TransferResult{Loan: loan, LenderSubject: toSubject, OperationID: op.ID, TxHash: txHash}, nil
+}
+
+// transferSigner returns the caller's signer when the caller actually owns the note, and ErrNotNoteOwner otherwise.
+func (s *Service) transferSigner(ctx context.Context, caller Caller, owner common.Address) (*eth.Signer, error) {
+	if caller.Servicer {
+		signer := s.chain.DefaultSigner()
+		if owner != signer.Address() {
+			return nil, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+		}
+		return signer, nil
+	}
+
+	signer, err := s.identities.SignerForIdentity(ctx, caller.IdentityID)
+	if errors.Is(err, identity.ErrNoCustodialKey) {
+		return nil, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve caller signer: %w", err)
+	}
+	if owner != signer.Address() {
+		return nil, fmt.Errorf("%w: note is held by %s", ErrNotNoteOwner, owner.Hex())
+	}
+	return signer, nil
 }
 
 func (s *Service) Default(ctx context.Context, loanID int64) (DefaultResult, error) {

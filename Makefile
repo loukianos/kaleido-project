@@ -41,7 +41,7 @@ lint:
 
 .PHONY: dev-up
 dev-up:
-	docker compose up -d --wait postgres
+	docker compose up -d --wait postgres keycloak
 	$(MAKE) migrate
 	docker compose up -d --build --remove-orphans api
 

@@ -13,6 +13,7 @@ import (
 
 	"kaleido-project/db/sqlc"
 	"kaleido-project/internal/api"
+	"kaleido-project/internal/auth"
 	"kaleido-project/internal/config"
 	"kaleido-project/internal/contracts"
 	"kaleido-project/internal/eth"
@@ -77,7 +78,16 @@ func run(ctx context.Context) error {
 	}
 	identityService := identity.NewService(queries, encryptor)
 	loanRepo := loans.NewRepository(queries, conn)
-	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder, identityService)
+	loanService := loans.NewService(loanRepo, ethClient, lockManager, lockHolder, identityService, cfg.OIDCIssuerURL)
+
+	verifier, err := auth.NewOIDCVerifier(startupCtx, auth.OIDCConfig{
+		IssuerURL: cfg.OIDCIssuerURL,
+		JWKSURL:   cfg.OIDCJWKSURL,
+		Audience:  cfg.OIDCAudience,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize oidc verifier: %w", err)
+	}
 
 	server := &http.Server{
 		Addr: ":" + cfg.Port,
@@ -94,6 +104,8 @@ func run(ctx context.Context) error {
 			},
 			Contracts:     contractService,
 			Loans:         loanService,
+			Verifier:      verifier,
+			Identities:    identityService,
 			SignerAddress: ethClient.SignerAddress().Hex(),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
