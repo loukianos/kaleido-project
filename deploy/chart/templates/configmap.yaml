@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kaleido-api
+data:
+  PORT: "8080"
+  ETH_RPC_URL: {{ .Values.ethRpcUrl | quote }}
+  CHAIN_ID: {{ .Values.chainId | quote }}
+  LOAN_BASE_URI: {{ .Values.loanBaseUri | quote }}
+  KEY_ENCRYPTOR: {{ .Values.keyEncryptor | quote }}
+  KMS_KEY_ID: {{ .Values.kmsKeyId | quote }}
+  AWS_REGION: {{ .Values.awsRegion | quote }}
+  OIDC_ISSUER_URL: {{ .Values.oidcIssuerUrl | quote }}
+  # JWKS is fetched in-cluster (service port 80); tokens carry the public issuer above.
+  OIDC_JWKS_URL: "http://kaleido-keycloak/realms/loan-notes/protocol/openid-connect/certs"
+  OIDC_AUDIENCE: {{ .Values.oidcAudience | quote }}
+  SERVICER_KEY_POOL_SIZE: {{ .Values.servicerKeyPoolSize | quote }}
+  RECONCILE_INTERVAL_SECONDS: {{ .Values.reconcileIntervalSeconds | quote }}

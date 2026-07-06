@@ -1,0 +1,64 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a queued push supersedes an unstarted one.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Deploy config comes from repo variables/secrets seeded by `make cloud-ci-config` after terraform apply.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        run: |
+          docker build --build-arg VERSION="${GITHUB_SHA::7}" \
+            -t "${{ vars.ECR_REPOSITORY_URL }}:latest" \
+            -t "${{ vars.ECR_REPOSITORY_URL }}:${GITHUB_SHA::7}" .
+          docker push --all-tags "${{ vars.ECR_REPOSITORY_URL }}"
+
+      - name: Deploy
+        run: |
+          aws eks update-kubeconfig --region "${{ vars.AWS_REGION }}" --name "${{ vars.EKS_CLUSTER_NAME }}"
+          helm upgrade --install kaleido deploy/chart -n kaleido --create-namespace \
+            --set image.repository="${{ vars.ECR_REPOSITORY_URL }}" \
+            --set image.tag="${GITHUB_SHA::7}" \
+            --set databaseUrl="${{ secrets.DATABASE_URL }}" \
+            --set kmsKeyId="${{ vars.KMS_KEY_ID }}" \
+            --set irsaRoleArn="${{ vars.API_IRSA_ROLE_ARN }}" \
+            --set awsRegion="${{ vars.AWS_REGION }}" \
+            --set-file keycloak.realmJson=.local/keycloak-realm.json \
+            --wait --timeout 10m
+          API_LB="$(kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+          KC_LB="$(kubectl get svc kaleido-keycloak -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+          helm upgrade kaleido deploy/chart -n kaleido --reuse-values \
+            --set oidcIssuerUrl="http://${KC_LB}/realms/loan-notes" \
+            --set loanBaseUri="http://${API_LB}/loans/" \
+            --wait --timeout 5m
+          echo "API_URL=http://${API_LB}" >> "$GITHUB_ENV"
+          echo "KEYCLOAK_URL=http://${KC_LB}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Smoke test (full demo against the deployment)
+        run: go run ./cmd/demo

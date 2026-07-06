@@ -13,8 +13,10 @@ import (
 )
 
 // Encryptor is the seam between key storage and the encryption backend.
-// The local AES-GCM implementation serves dev and demo; a cloud KMS implementation slots in behind the same interface without a schema change.
+// The local AES-GCM implementation serves dev and demo; the AWS KMS implementation serves cloud deployments behind the same interface without a schema change.
 type Encryptor interface {
+	// Scheme names the implementation, stored per row so decryption dispatches to the right backend.
+	Scheme() string
 	// Encrypt seals plaintext and reports the key version it was sealed with.
 	Encrypt(ctx context.Context, plaintext []byte) (ciphertext []byte, version int, err error)
 	// Decrypt opens ciphertext that was sealed with the given key version.
@@ -53,6 +55,8 @@ func NewAESGCM(masterKeyHex string) (*AESGCM, error) {
 	}
 	return &AESGCM{aead: aead}, nil
 }
+
+func (e *AESGCM) Scheme() string { return AESGCMScheme }
 
 func (e *AESGCM) Encrypt(_ context.Context, plaintext []byte) ([]byte, int, error) {
 	nonce := make([]byte, e.aead.NonceSize())

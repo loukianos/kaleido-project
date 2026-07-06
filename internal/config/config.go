@@ -28,6 +28,9 @@ type Config struct {
 	OIDCAudience             string
 	ServicerKeyPoolSize      int
 	ReconcileIntervalSeconds int
+	// KeyEncryptor selects the signing-key encryption backend: keys.AESGCMScheme (local) or keys.KMSScheme (cloud).
+	KeyEncryptor string
+	KMSKeyID     string
 }
 
 func Load() (Config, error) {
@@ -40,6 +43,8 @@ func Load() (Config, error) {
 		KeyEncryptionMasterKey: getenv("KEY_ENCRYPTION_MASTER_KEY", devKeyEncryptionMasterKey),
 		OIDCIssuerURL:          getenv("OIDC_ISSUER_URL", "http://localhost:8081/realms/loan-notes"),
 		OIDCAudience:           getenv("OIDC_AUDIENCE", "loan-notes-api"),
+		KeyEncryptor:           getenv("KEY_ENCRYPTOR", keys.AESGCMScheme),
+		KMSKeyID:               os.Getenv("KMS_KEY_ID"),
 	}
 	// The JWKS fetch path can differ from the issuer name in tokens (compose service name vs host-published URL).
 	cfg.OIDCJWKSURL = getenv("OIDC_JWKS_URL", cfg.OIDCIssuerURL+"/protocol/openid-connect/certs")
@@ -89,8 +94,17 @@ func (c Config) validate() error {
 			return fmt.Errorf("DEPLOYER_PRIVATE_KEY is invalid: %w", err)
 		}
 	}
-	if _, err := keys.NewAESGCM(c.KeyEncryptionMasterKey); err != nil {
-		return fmt.Errorf("KEY_ENCRYPTION_MASTER_KEY is invalid: %w", err)
+	switch c.KeyEncryptor {
+	case keys.AESGCMScheme:
+		if _, err := keys.NewAESGCM(c.KeyEncryptionMasterKey); err != nil {
+			return fmt.Errorf("KEY_ENCRYPTION_MASTER_KEY is invalid: %w", err)
+		}
+	case keys.KMSScheme:
+		if c.KMSKeyID == "" {
+			return fmt.Errorf("KMS_KEY_ID is required when KEY_ENCRYPTOR is %s", keys.KMSScheme)
+		}
+	default:
+		return fmt.Errorf("KEY_ENCRYPTOR must be %s or %s, got %q", keys.AESGCMScheme, keys.KMSScheme, c.KeyEncryptor)
 	}
 	if c.OIDCIssuerURL == "" || c.OIDCJWKSURL == "" || c.OIDCAudience == "" {
 		return fmt.Errorf("OIDC_ISSUER_URL, OIDC_JWKS_URL, and OIDC_AUDIENCE must not be empty")

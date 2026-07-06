@@ -1,0 +1,36 @@
+# Values marked (tf) come from terraform outputs; the Makefile cloud-deploy target wires them.
+image:
+  repository: ""   # (tf) ECR repository URL
+  tag: latest
+
+# (tf) Postgres connection string, delivered as a Secret.
+databaseUrl: ""
+
+# (tf) IAM role the API service account assumes for KMS access.
+irsaRoleArn: ""
+
+# (tf) KMS key sealing custodial signing keys.
+kmsKeyId: ""
+keyEncryptor: aws-kms
+
+awsRegion: us-east-1
+
+# In-cluster Besu JSON-RPC endpoint from the Paladin install.
+ethRpcUrl: http://besu-node1.paladin.svc.cluster.local:8545
+chainId: "1337"
+
+# Throwaway dev deployer key; a real deployment would source this from a secret manager.
+deployerPrivateKey: "0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
+
+# Set after the LoadBalancers exist (phase two of cloud-deploy): tokens carry the public Keycloak issuer, and loan metadata URIs point at the public API.
+oidcIssuerUrl: "http://keycloak.pending/realms/loan-notes"
+loanBaseUri: "http://api.pending/loans/"
+oidcAudience: loan-notes-api
+
+servicerKeyPoolSize: "2"
+reconcileIntervalSeconds: "5"
+
+keycloak:
+  image: quay.io/keycloak/keycloak:26.4
+  # Realm export JSON; the Makefile passes it with --set-file from .local/keycloak-realm.json.
+  realmJson: ""

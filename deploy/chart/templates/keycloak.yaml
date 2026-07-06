@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kaleido-keycloak-realm
+data:
+  loan-notes-realm.json: {{ .Values.keycloak.realmJson | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaleido-keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kaleido-keycloak
+  template:
+    metadata:
+      labels:
+        app: kaleido-keycloak
+      annotations:
+        checksum/realm: {{ .Values.keycloak.realmJson | sha256sum }}
+    spec:
+      containers:
+        - name: keycloak
+          image: {{ .Values.keycloak.image | quote }}
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: admin
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: realm
+          configMap:
+            name: kaleido-keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaleido-keycloak
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+spec:
+  type: LoadBalancer
+  selector:
+    app: kaleido-keycloak
+  ports:
+    - port: 80
+      targetPort: 8080

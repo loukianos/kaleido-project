@@ -71,6 +71,90 @@ paladin-down:
 .PHONY: local-reset
 local-reset: dev-down paladin-down
 
+# ---------- Cloud (EKS) ----------
+# All AWS access uses the loukianos profile; CI overrides AWS_PROFILE to empty for the default chain.
+AWS_PROFILE ?= loukianos
+TF := AWS_PROFILE=$(AWS_PROFILE) terraform -chdir=deploy/terraform
+
+.PHONY: cloud-up
+cloud-up:
+	$(TF) init -input=false
+	$(TF) apply -input=false -auto-approve
+
+.PHONY: cloud-kubeconfig
+cloud-kubeconfig:
+	aws eks update-kubeconfig --profile "$(AWS_PROFILE)" \
+		--region "$$($(TF) output -raw region)" \
+		--name "$$($(TF) output -raw cluster_name)"
+
+.PHONY: cloud-besu-up
+cloud-besu-up: cloud-kubeconfig
+	# EKS ships gp2 without the default annotation; the Besu PVCs don't name a class, so one must be default.
+	kubectl patch storageclass gp2 -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+	helm repo add paladin https://LFDT-Paladin.github.io/paladin --force-update
+	helm repo add jetstack https://charts.jetstack.io --force-update
+	helm upgrade --install paladin-crds paladin/paladin-operator-crd
+	helm upgrade --install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.16.1 --set crds.enabled=true
+	helm upgrade --install paladin paladin/paladin-operator -n paladin --create-namespace
+	kubectl wait -n paladin --for=create statefulset/besu-node1 --timeout=300s
+	kubectl wait -n paladin --for=create statefulset/besu-node2 --timeout=300s
+	kubectl wait -n paladin --for=create statefulset/besu-node3 --timeout=300s
+	kubectl rollout status -n paladin statefulset/besu-node1 --timeout=300s
+	kubectl rollout status -n paladin statefulset/besu-node2 --timeout=300s
+	kubectl rollout status -n paladin statefulset/besu-node3 --timeout=300s
+
+.PHONY: cloud-push
+cloud-push:
+	$(eval ECR_URL := $(shell $(TF) output -raw ecr_repository_url))
+	aws ecr get-login-password --profile "$(AWS_PROFILE)" --region "$$($(TF) output -raw region)" \
+		| docker login --username AWS --password-stdin "$(ECR_URL)"
+	docker buildx build --platform linux/amd64 \
+		--build-arg VERSION="$$(git rev-parse --short HEAD)" \
+		-t "$(ECR_URL):latest" --push .
+
+.PHONY: cloud-deploy
+cloud-deploy: cloud-kubeconfig
+	helm upgrade --install kaleido deploy/chart -n kaleido --create-namespace \
+		--set image.repository="$$($(TF) output -raw ecr_repository_url)" \
+		--set databaseUrl="$$($(TF) output -raw database_url)" \
+		--set kmsKeyId="$$($(TF) output -raw kms_key_id)" \
+		--set irsaRoleArn="$$($(TF) output -raw api_irsa_role_arn)" \
+		--set awsRegion="$$($(TF) output -raw region)" \
+		--set-file keycloak.realmJson=.local/keycloak-realm.json \
+		--wait --timeout 10m
+	# Phase two: the LoadBalancer hostnames exist now, so tokens can carry the public issuer and metadata URIs the public API.
+	@until kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' | grep -q amazonaws; do echo "waiting for api load balancer"; sleep 5; done
+	@until kubectl get svc kaleido-keycloak -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' | grep -q amazonaws; do echo "waiting for keycloak load balancer"; sleep 5; done
+	API_LB="$$(kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"; \
+	KC_LB="$$(kubectl get svc kaleido-keycloak -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"; \
+	helm upgrade kaleido deploy/chart -n kaleido --reuse-values \
+		--set oidcIssuerUrl="http://$$KC_LB/realms/loan-notes" \
+		--set loanBaseUri="http://$$API_LB/loans/" \
+		--wait --timeout 5m
+
+.PHONY: cloud-demo
+cloud-demo: cloud-kubeconfig
+	API_URL="http://$$(kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')" \
+	KEYCLOAK_URL="http://$$(kubectl get svc kaleido-keycloak -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')" \
+	go run ./cmd/demo
+
+.PHONY: cloud-ci-config
+cloud-ci-config:
+	# Seeds the GitHub repo variables/secrets the deploy workflow reads, from terraform outputs. One-time after cloud-up.
+	gh variable set AWS_REGION --body "$$($(TF) output -raw region)"
+	gh variable set EKS_CLUSTER_NAME --body "$$($(TF) output -raw cluster_name)"
+	gh variable set ECR_REPOSITORY_URL --body "$$($(TF) output -raw ecr_repository_url)"
+	gh variable set KMS_KEY_ID --body "$$($(TF) output -raw kms_key_id)"
+	gh variable set API_IRSA_ROLE_ARN --body "$$($(TF) output -raw api_irsa_role_arn)"
+	gh secret set DATABASE_URL --body "$$($(TF) output -raw database_url)"
+
+.PHONY: cloud-down
+cloud-down: cloud-kubeconfig
+	# The LoadBalancers live outside terraform; remove them first or the VPC destroy hangs.
+	helm uninstall kaleido -n kaleido --wait || true
+	$(TF) destroy -input=false -auto-approve
+
+# ---------- Contracts ----------
 .PHONY: contracts-install
 contracts-install:
 	cd contracts && npm install

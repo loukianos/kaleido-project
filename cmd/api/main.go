@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/ethereum/go-ethereum/common"
 
 	"kaleido-project/db/sqlc"
@@ -66,10 +68,11 @@ func run(ctx context.Context) error {
 	queries := db.New(conn)
 	lockManager := db.NewLockManager(queries)
 	lockHolder := fmt.Sprintf("%s:%d", hostname(), os.Getpid())
-	encryptor, err := keys.NewAESGCM(cfg.KeyEncryptionMasterKey)
+	encryptor, err := buildEncryptor(startupCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("initialize key encryptor: %w", err)
 	}
+	logger.Info("key encryptor ready", "scheme", encryptor.Scheme())
 	identityService := identity.NewService(queries, encryptor)
 
 	poolSigners, err := identityService.EnsureServicerPool(startupCtx, cfg.ServicerKeyPoolSize)
@@ -155,6 +158,18 @@ func run(ctx context.Context) error {
 		logger.Info("shutdown complete")
 	}
 	return nil
+}
+
+// buildEncryptor selects the signing-key encryption backend: local AES-GCM for dev, AWS KMS in the cloud (credentials via the default chain, i.e. IRSA in-cluster).
+func buildEncryptor(ctx context.Context, cfg config.Config) (keys.Encryptor, error) {
+	if cfg.KeyEncryptor == keys.KMSScheme {
+		awsConfig, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load aws config: %w", err)
+		}
+		return keys.NewKMS(kms.NewFromConfig(awsConfig), cfg.KMSKeyID)
+	}
+	return keys.NewAESGCM(cfg.KeyEncryptionMasterKey)
 }
 
 func hostname() string {

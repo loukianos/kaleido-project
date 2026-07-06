@@ -13,7 +13,8 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
-    -o /out/api ./cmd/api
+    -o /out/api ./cmd/api \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
 
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates \
@@ -22,6 +23,9 @@ RUN apk add --no-cache ca-certificates \
 
 WORKDIR /app
 COPY --from=build /out/api /usr/local/bin/api
+COPY --from=build /out/migrate /usr/local/bin/migrate
+# goose reads migration SQL from disk relative to the workdir.
+COPY db/migration /app/db/migration
 
 USER app
 EXPOSE 8080
