@@ -17,6 +17,9 @@ export default defineConfig({
     settings: {
       optimizer: { enabled: true, runs: 200 },
       evmVersion: "prague",
+      // Keep bytecode a pure function of source + settings so the committed
+      // Go bindings can be diff-checked reproducibly across machines and CI.
+      metadata: { bytecodeHash: "none" },
     },
   },
   paths: { sources: "src" },

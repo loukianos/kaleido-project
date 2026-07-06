@@ -1,5 +1,7 @@
 # kaleido-project
 
+[![ci](https://github.com/loukianos/kaleido-project/actions/workflows/ci.yml/badge.svg)](https://github.com/loukianos/kaleido-project/actions/workflows/ci.yml)
+
 A Go API microservice for a loan-note business use case backed by an ERC-721 NFT.
 Each token represents a lender's claim to repayment.
 - Origination mints the note
@@ -123,3 +125,15 @@ Bypass the hooks with `git commit --no-verify`.
 ```bash
 make test # unit tests, race detector on
 ```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on pushes to `main` and on pull requests:
+
+- **lint** — `golangci-lint` (pinned to the same version used locally)
+- **test** — `make test` (race detector on)
+- **generated** — regenerates sqlc, swagger, and contract bindings, then fails if the committed copies are out of sync (the CI enforcement of the [pre-commit hooks](#git-hooks))
+- **docker** — verifies the API image builds
+
+Contract bytecode is compiled with `metadata.bytecodeHash: "none"` so the committed Go bindings are reproducible byte-for-byte across machines.
+Without it, solc appends an IPFS metadata hash that shifts with toolchain state and would make the sync check flaky.
