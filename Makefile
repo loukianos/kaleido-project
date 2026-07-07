@@ -2,6 +2,47 @@
 hooks:
 	pre-commit install
 
+.PHONY: bootstrap
+bootstrap:
+	@if [ -e .env ]; then echo ".env already exists; refusing to overwrite"; exit 1; fi
+	@if [ -e .local/keycloak-realm.json ]; then echo ".local/keycloak-realm.json already exists; refusing to overwrite"; exit 1; fi
+	@command -v openssl >/dev/null || { echo "openssl is required"; exit 1; }
+	@command -v jq >/dev/null || { echo "jq is required"; exit 1; }
+	@cp .env.example .env
+	@DEPLOYER_PRIVATE_KEY="0x$$(openssl rand -hex 32)"; \
+	KEY_ENCRYPTION_MASTER_KEY="$$(openssl rand -hex 32)"; \
+	KEYCLOAK_ADMIN_PASSWORD="$$(openssl rand -base64 24 | tr -d '\n')"; \
+	SERVICER_CLIENT_SECRET="$$(openssl rand -base64 32 | tr -d '\n')"; \
+	ALICE_PASSWORD="$$(openssl rand -base64 24 | tr -d '\n')"; \
+	BOB_PASSWORD="$$(openssl rand -base64 24 | tr -d '\n')"; \
+	awk \
+		-v deployer="$$DEPLOYER_PRIVATE_KEY" \
+		-v master="$$KEY_ENCRYPTION_MASTER_KEY" \
+		-v admin="$$KEYCLOAK_ADMIN_PASSWORD" \
+		-v servicer="$$SERVICER_CLIENT_SECRET" \
+		-v alice="$$ALICE_PASSWORD" \
+		-v bob="$$BOB_PASSWORD" \
+		' \
+		/^DEPLOYER_PRIVATE_KEY=/ { print "DEPLOYER_PRIVATE_KEY=" deployer; next } \
+		/^KEY_ENCRYPTION_MASTER_KEY=/ { print "KEY_ENCRYPTION_MASTER_KEY=" master; next } \
+		/^KEYCLOAK_ADMIN_PASSWORD=/ { print "KEYCLOAK_ADMIN_PASSWORD=" admin; next } \
+		/^SERVICER_CLIENT_SECRET=/ { print "SERVICER_CLIENT_SECRET=" servicer; next } \
+		/^ALICE_PASSWORD=/ { print "ALICE_PASSWORD=" alice; next } \
+		/^BOB_PASSWORD=/ { print "BOB_PASSWORD=" bob; next } \
+		{ print } \
+		' .env > .env.tmp; \
+	mv .env.tmp .env; \
+	jq \
+		--arg servicer "$$SERVICER_CLIENT_SECRET" \
+		--arg alice "$$ALICE_PASSWORD" \
+		--arg bob "$$BOB_PASSWORD" \
+		' \
+		(.clients[] | select(.clientId == "servicer") | .secret) = $$servicer | \
+		(.users[] | select(.username == "alice") | .credentials[0].value) = $$alice | \
+		(.users[] | select(.username == "bob") | .credentials[0].value) = $$bob \
+		' .local/keycloak-realm.example.json > .local/keycloak-realm.json
+	@echo "Generated .env and .local/keycloak-realm.json"
+
 .PHONY: migrate
 migrate:
 	go run ./cmd/migrate

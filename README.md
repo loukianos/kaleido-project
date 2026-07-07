@@ -23,6 +23,7 @@ Each token represents a lender's claim to repayment.
 To run the demo:
 
 ```bash
+make bootstrap # set dummy variables for secret-like things
 make paladin-up # start the local Besu network
 make dev-up # start database, run migrations, start the API
 make demo # authenticates all actors via Keycloak, onboards custodial lenders, deploys a contract, warehouses + sells a loan, shows anonymous/non-owner/non-onboarded calls refused, moves a note between custodial lenders under their own tokens, originates a loan on a second contract instance, then floods the servicer key pool: overflow mints come back 202 and the reconciler converges every loan to active with no client retries
@@ -86,44 +87,11 @@ Our application loads defaults that match `.env` but we could just as easily fai
 To generate local-only values for a new machine:
 
 ```bash
-cp .env.example .env
-
-export DEPLOYER_PRIVATE_KEY="0x$(openssl rand -hex 32)"
-export KEY_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
-export KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
-export SERVICER_CLIENT_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
-export ALICE_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
-export BOB_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
-
-awk \
-  -v deployer="$DEPLOYER_PRIVATE_KEY" \
-  -v master="$KEY_ENCRYPTION_MASTER_KEY" \
-  -v admin="$KEYCLOAK_ADMIN_PASSWORD" \
-  -v servicer="$SERVICER_CLIENT_SECRET" \
-  -v alice="$ALICE_PASSWORD" \
-  -v bob="$BOB_PASSWORD" \
-  '
-  /^DEPLOYER_PRIVATE_KEY=/ { print "DEPLOYER_PRIVATE_KEY=" deployer; next }
-  /^KEY_ENCRYPTION_MASTER_KEY=/ { print "KEY_ENCRYPTION_MASTER_KEY=" master; next }
-  /^KEYCLOAK_ADMIN_PASSWORD=/ { print "KEYCLOAK_ADMIN_PASSWORD=" admin; next }
-  /^SERVICER_CLIENT_SECRET=/ { print "SERVICER_CLIENT_SECRET=" servicer; next }
-  /^ALICE_PASSWORD=/ { print "ALICE_PASSWORD=" alice; next }
-  /^BOB_PASSWORD=/ { print "BOB_PASSWORD=" bob; next }
-  { print }
-  ' .env > .env.tmp && mv .env.tmp .env
-
-jq \
-  --arg servicer "$SERVICER_CLIENT_SECRET" \
-  --arg alice "$ALICE_PASSWORD" \
-  --arg bob "$BOB_PASSWORD" \
-  '
-  (.clients[] | select(.clientId == "servicer") | .secret) = $servicer |
-  (.users[] | select(.username == "alice") | .credentials[0].value) = $alice |
-  (.users[] | select(.username == "bob") | .credentials[0].value) = $bob
-  ' .local/keycloak-realm.example.json > .local/keycloak-realm.json
+make bootstrap
 ```
 
-These commands require `openssl` and `jq`.
+This creates `.env` and `.local/keycloak-realm.json`, filling `DEPLOYER_PRIVATE_KEY`, `KEY_ENCRYPTION_MASTER_KEY`, `KEYCLOAK_ADMIN_PASSWORD`, `SERVICER_CLIENT_SECRET`, `ALICE_PASSWORD`, and `BOB_PASSWORD`.
+The target requires `openssl` and `jq`, and refuses to overwrite existing local files.
 If Keycloak is already running, recreate the local stack after changing `.local/keycloak-realm.json` so the realm import sees the new values.
 
 | Variable               | Default                             | Description                               |
