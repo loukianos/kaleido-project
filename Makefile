@@ -74,12 +74,23 @@ local-reset: dev-down paladin-down
 # ---------- Cloud (EKS) ----------
 # All AWS access uses the loukianos profile; CI overrides AWS_PROFILE to empty for the default chain.
 AWS_PROFILE ?= loukianos
+KUBERNETES_VERSION ?= 1.36
+KUBERNETES_UPGRADE_VERSIONS ?= 1.32 1.33 1.34 1.35 1.36
 TF := AWS_PROFILE=$(AWS_PROFILE) terraform -chdir=deploy/terraform
 
 .PHONY: cloud-up
 cloud-up:
 	$(TF) init -input=false
-	$(TF) apply -input=false -auto-approve
+	$(TF) apply -input=false -auto-approve -var=kubernetes_version=$(KUBERNETES_VERSION)
+
+.PHONY: cloud-upgrade-k8s-from-1-31
+cloud-upgrade-k8s-from-1-31:
+	$(TF) init -input=false
+	@set -e; \
+	for version in $(KUBERNETES_UPGRADE_VERSIONS); do \
+		echo "Upgrading EKS control plane and managed node group to Kubernetes $$version"; \
+		$(TF) apply -input=false -auto-approve -var=kubernetes_version=$$version; \
+	done
 
 .PHONY: cloud-kubeconfig
 cloud-kubeconfig:

@@ -28,6 +28,14 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.36.2
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.2.2
+
       - name: Build and push image
         run: |
           docker build --build-arg VERSION="${GITHUB_SHA::7}" \

@@ -14,7 +14,8 @@ Each token represents a lender's claim to repayment.
 - Docker and Docker Compose v2
 - Node.js 22+ (for the Hardhat smart-contract project)
 - jq (for extracting ABI/bytecode when regenerating Go bindings)
-- Kind, kubectl, and Helm v3 for the Besu network
+- Terraform 1.15+
+- Kind, kubectl 1.36.x, and Helm 4.2.x for Kubernetes/EKS workflows
 - [pre-commit](https://pre-commit.com/) for the code-generation git hooks
 
 ## Quick start
@@ -218,6 +219,7 @@ The Besu network runs in-cluster via the same Paladin operator install as local 
 
 ```bash
 make cloud-up         # terraform apply: VPC, EKS, RDS, ECR, KMS (~20 minutes)
+make cloud-upgrade-k8s-from-1-31 # one-time sequential upgrade for an existing 1.31 cluster to 1.36
 make cloud-besu-up    # install the Paladin/Besu network on the cluster
 make cloud-push       # build the linux/amd64 image and push to ECR
 make cloud-deploy     # helm install: migrations, API, Keycloak; wires public LB endpoints in a second pass
@@ -229,10 +231,25 @@ make cloud-down       # tear everything down
 `cloud-deploy` runs in two phases because token issuers must match what callers see: the first install brings everything up behind LoadBalancers, and the second pass sets `OIDC_ISSUER_URL` and `LOAN_BASE_URI` to the LB hostnames once they exist.
 JWKS is still fetched over the cluster network — the same issuer/JWKS split used in docker-compose.
 
+Terraform targets new EKS clusters at Kubernetes `1.36`. Existing EKS clusters must be upgraded one minor version at a time; use `make cloud-upgrade-k8s-from-1-31` for the current production cluster before relying on the default `make cloud-up` target. The target applies `1.32`, `1.33`, `1.34`, `1.35`, then `1.36` in order so AWS does not reject a direct minor-version jump.
+
+### Infrastructure deployment
+
+`.github/workflows/terraform.yml` owns Terraform changes separately from application deployment. Pull requests that touch `.github/workflows/terraform.yml` or `deploy/terraform/**` run `terraform plan`; pushes to `main` for those paths run `terraform apply`. Applies detect the live EKS cluster version and advance one Kubernetes minor at a time until `KUBERNETES_VERSION` is reached.
+
+Terraform state is stored in S3 at `s3://kaleido-project-tfstate-433484250096-us-east-1/kaleido/terraform.tfstate` with native S3 lockfiles. The state bucket has versioning, default server-side encryption, and public access blocked.
+
+| Variable | Description |
+|----------|-------------|
+| `KUBERNETES_VERSION` | Optional EKS target version for the Terraform workflow; defaults to `1.31` so the first CI run is a no-op |
+
+Set `KUBERNETES_VERSION=1.31` before merging the Terraform workflow if you want the first CI run to prove remote state access without upgrading the cluster. Change it to `1.36` when ready to perform the sequential EKS upgrade.
+
 ### Continuous deployment
 
 `.github/workflows/deploy.yml` deploys every push to `main`: build and push to ECR, `helm upgrade`, then the full demo runs against the deployment as a smoke test.
 It reads the repo variables/secrets seeded by `make cloud-ci-config`, using the `github-actions-deployer` IAM user credentials stored as repo secrets.
+This workflow deploys application changes only; infrastructure changes are handled by the separate Terraform workflow.
 
 ## CI
 
