@@ -101,6 +101,7 @@ If Keycloak is already running, recreate the local stack after changing `.local/
 | `API_ETH_RPC_URL`      | `http://host.docker.internal:31545` | API container Besu JSON-RPC endpoint      |
 | `CHAIN_ID`             | `1337`                              | Chain id of the Besu network              |
 | `DATABASE_URL`         | local Postgres                      | Postgres connection string                |
+| `API_DATABASE_URL`     | compose Postgres service            | Postgres URL used by the API container    |
 | `LOAN_BASE_URI`        | local API loans URI                 | Base URI used to build loan metadata URIs |
 | `DEPLOYER_PRIVATE_KEY` | required locally / GitHub Secret in cloud | In-app transaction signer key             |
 | `KEY_ENCRYPTION_MASTER_KEY` | required locally; unused by cloud KMS | AES-256 master key encrypting custodial signing keys at rest |

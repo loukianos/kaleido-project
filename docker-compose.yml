@@ -9,7 +9,7 @@ services:
       PORT: "${PORT:-8080}"
       ETH_RPC_URL: "${API_ETH_RPC_URL:-http://host.docker.internal:31545}"
       CHAIN_ID: "${CHAIN_ID:-1337}"
-      DATABASE_URL: "${DATABASE_URL:-postgres://loan_notes:loan_notes@postgres:5432/loan_notes?sslmode=disable}"
+      DATABASE_URL: "${API_DATABASE_URL:-postgres://loan_notes:loan_notes@postgres:5432/loan_notes?sslmode=disable}"
       LOAN_BASE_URI: "${LOAN_BASE_URI:-http://localhost:8080/loans/}"
       DEPLOYER_PRIVATE_KEY: "${DEPLOYER_PRIVATE_KEY:?set DEPLOYER_PRIVATE_KEY in .env}"
       KEY_ENCRYPTION_MASTER_KEY: "${KEY_ENCRYPTION_MASTER_KEY:?set KEY_ENCRYPTION_MASTER_KEY in .env}"
