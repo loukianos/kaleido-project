@@ -19,8 +19,8 @@ awsRegion: us-east-1
 ethRpcUrl: http://besu-node1.paladin.svc.cluster.local:8545
 chainId: "1337"
 
-# Throwaway dev deployer key; a real deployment would source this from a secret manager.
-deployerPrivateKey: "0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
+# Private key for the platform admin/signer, delivered as a Secret.
+deployerPrivateKey: ""
 
 # Set after the LoadBalancers exist (phase two of cloud-deploy): tokens carry the public Keycloak issuer, and loan metadata URIs point at the public API.
 oidcIssuerUrl: "http://keycloak.pending/realms/loan-notes"
@@ -32,5 +32,6 @@ reconcileIntervalSeconds: "5"
 
 keycloak:
   image: quay.io/keycloak/keycloak:26.4
-  # Realm export JSON; the Makefile passes it with --set-file from .local/keycloak-realm.json.
+  adminPassword: ""
+  # Realm export JSON; CI passes it from GitHub Secrets, and local deploys can pass an ignored file.
   realmJson: ""

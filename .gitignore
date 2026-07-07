@@ -6,6 +6,7 @@ coverage.out
 
 .env
 !.env.example
+.local/keycloak-realm.json
 
 .DS_Store
 .idea/

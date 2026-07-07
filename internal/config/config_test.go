@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,10 +12,11 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"PORT",
 		"ETH_RPC_URL", "CHAIN_ID", "DATABASE_URL",
-		"LOAN_BASE_URI", "DEPLOYER_PRIVATE_KEY",
+		"LOAN_BASE_URI", "DEPLOYER_PRIVATE_KEY", "KEY_ENCRYPTION_MASTER_KEY",
 	} {
 		t.Setenv(k, "")
 	}
+	t.Setenv("KEY_ENCRYPTION_MASTER_KEY", strings.Repeat("a", 64))
 }
 
 func TestLoadValidationErrors(t *testing.T) {

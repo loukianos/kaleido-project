@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: kaleido-keycloak-realm
 data:
-  loan-notes-realm.json: {{ .Values.keycloak.realmJson | quote }}
+  loan-notes-realm.json: {{ required "keycloak.realmJson is required" .Values.keycloak.realmJson | quote }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -19,7 +19,7 @@ spec:
       labels:
         app: kaleido-keycloak
       annotations:
-        checksum/realm: {{ .Values.keycloak.realmJson | sha256sum }}
+        checksum/realm: {{ required "keycloak.realmJson is required" .Values.keycloak.realmJson | sha256sum }}
     spec:
       containers:
         - name: keycloak
@@ -29,7 +29,10 @@ spec:
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
-              value: admin
+              valueFrom:
+                secretKeyRef:
+                  name: kaleido-api
+                  key: KEYCLOAK_ADMIN_PASSWORD
           ports:
             - containerPort: 8080
           volumeMounts:

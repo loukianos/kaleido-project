@@ -12,9 +12,6 @@ import (
 	"kaleido-project/internal/keys"
 )
 
-// devKeyEncryptionMasterKey is a throwaway dev default matching .env.example, like the deployer key.
-const devKeyEncryptionMasterKey = "6a006ea1d0bfd421d93890dfe78ec0fb16e74a9818e5a097a5d5cc0f62693051"
-
 type Config struct {
 	Port                     string
 	EthRPCURL                string
@@ -40,7 +37,7 @@ func Load() (Config, error) {
 		DatabaseURL:            getenv("DATABASE_URL", "postgres://loan_notes:loan_notes@127.0.0.1:5432/loan_notes?sslmode=disable"),
 		LoanBaseURI:            getenv("LOAN_BASE_URI", "http://localhost:8080/loans/"),
 		DeployerPrivateKey:     os.Getenv("DEPLOYER_PRIVATE_KEY"),
-		KeyEncryptionMasterKey: getenv("KEY_ENCRYPTION_MASTER_KEY", devKeyEncryptionMasterKey),
+		KeyEncryptionMasterKey: os.Getenv("KEY_ENCRYPTION_MASTER_KEY"),
 		OIDCIssuerURL:          getenv("OIDC_ISSUER_URL", "http://localhost:8081/realms/loan-notes"),
 		OIDCAudience:           getenv("OIDC_AUDIENCE", "loan-notes-api"),
 		KeyEncryptor:           getenv("KEY_ENCRYPTOR", keys.AESGCMScheme),

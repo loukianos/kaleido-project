@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	db "kaleido-project/db/sqlc"
 	"kaleido-project/internal/auth"
@@ -88,7 +89,7 @@ func (f fakeIdentityService) OnboardLender(ctx context.Context, issuer, subject 
 	if err != nil {
 		return db.Identity{}, nil, err
 	}
-	signer, err := eth.NewSigner("8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63")
+	signer, err := eth.NewSigner(strings.Repeat("1", 64))
 	if err != nil {
 		return db.Identity{}, nil, err
 	}

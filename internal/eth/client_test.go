@@ -3,20 +3,24 @@ package eth
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
 )
 
-const devPrivateKey = "0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
+var testPrivateKey = "0x" + strings.Repeat("1", 64)
 
 func TestNewDerivesSignerAddress(t *testing.T) {
-	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, devPrivateKey)
+	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, testPrivateKey)
 	require.NoError(t, err)
 
-	want := common.HexToAddress("0xFE3B557E8Fb62b89F4916B721be55cEb828dBd73")
+	privateKey, err := crypto.HexToECDSA(strings.TrimPrefix(testPrivateKey, "0x"))
+	require.NoError(t, err)
+	want := crypto.PubkeyToAddress(privateKey.PublicKey)
 	require.Equal(t, want, client.SignerAddress())
 }
 
@@ -26,14 +30,14 @@ func TestNewRequiresPrivateKey(t *testing.T) {
 }
 
 func TestCheckChainID(t *testing.T) {
-	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, devPrivateKey)
+	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, testPrivateKey)
 	require.NoError(t, err)
 
 	require.NoError(t, client.CheckChainID(context.Background()))
 }
 
 func TestCheckChainIDMismatch(t *testing.T) {
-	client, err := New(&fakeRPC{chainID: big.NewInt(1)}, 1337, devPrivateKey)
+	client, err := New(&fakeRPC{chainID: big.NewInt(1)}, 1337, testPrivateKey)
 	require.NoError(t, err)
 
 	err = client.CheckChainID(context.Background())
@@ -41,7 +45,7 @@ func TestCheckChainIDMismatch(t *testing.T) {
 }
 
 func TestSignTransactionRecoversSigner(t *testing.T) {
-	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, devPrivateKey)
+	client, err := New(&fakeRPC{chainID: big.NewInt(1337)}, 1337, testPrivateKey)
 	require.NoError(t, err)
 
 	tx := types.NewTx(&types.DynamicFeeTx{
@@ -65,7 +69,7 @@ func TestSignTransactionRecoversSigner(t *testing.T) {
 
 func TestPendingNonce(t *testing.T) {
 	rpc := &fakeRPC{chainID: big.NewInt(1337), nonce: 42}
-	client, err := New(rpc, 1337, devPrivateKey)
+	client, err := New(rpc, 1337, testPrivateKey)
 	require.NoError(t, err)
 
 	nonce, err := client.PendingNonceOf(context.Background(), client.SignerAddress())
@@ -76,7 +80,7 @@ func TestPendingNonce(t *testing.T) {
 
 func TestSignAndSendTransaction(t *testing.T) {
 	rpc := &fakeRPC{chainID: big.NewInt(1337)}
-	client, err := New(rpc, 1337, devPrivateKey)
+	client, err := New(rpc, 1337, testPrivateKey)
 	require.NoError(t, err)
 
 	tx := types.NewTx(&types.LegacyTx{

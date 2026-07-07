@@ -168,8 +168,8 @@ func neverSend(t *testing.T) func(*bind.TransactOpts, eth.ContractBackend) (*typ
 	}
 }
 
-// testSignerKey is a throwaway key so the fake writer's default signer can produce real transact opts.
-const testSignerKey = "8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63"
+// testSignerKey is deterministic test-only material so the fake writer can produce real transact opts.
+var testSignerKey = strings.Repeat("1", 64)
 
 // testPool builds n distinct signers from deterministic throwaway keys.
 func testPool(t *testing.T, n int) []*eth.Signer {

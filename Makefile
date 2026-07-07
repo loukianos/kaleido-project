@@ -125,13 +125,16 @@ cloud-push:
 
 .PHONY: cloud-deploy
 cloud-deploy: cloud-kubeconfig
+	REALM_FILE="$${KEYCLOAK_REALM_FILE:-.local/keycloak-realm.json}"; \
 	helm upgrade --install kaleido deploy/chart -n kaleido --create-namespace \
 		--set image.repository="$$($(TF) output -raw ecr_repository_url)" \
 		--set databaseUrl="$$($(TF) output -raw database_url)" \
+		--set deployerPrivateKey="$${DEPLOYER_PRIVATE_KEY:?set DEPLOYER_PRIVATE_KEY}" \
+		--set keycloak.adminPassword="$${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}" \
 		--set kmsKeyId="$$($(TF) output -raw kms_key_id)" \
 		--set irsaRoleArn="$$($(TF) output -raw api_irsa_role_arn)" \
 		--set awsRegion="$$($(TF) output -raw region)" \
-		--set-file keycloak.realmJson=.local/keycloak-realm.json \
+		--set-file keycloak.realmJson="$$REALM_FILE" \
 		--wait --timeout 10m
 	# Phase two: the LoadBalancer hostnames exist now, so tokens can carry the public issuer and metadata URIs the public API.
 	@until kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' | grep -q amazonaws; do echo "waiting for api load balancer"; sleep 5; done
@@ -158,6 +161,12 @@ cloud-ci-config:
 	gh variable set KMS_KEY_ID --body "$$($(TF) output -raw kms_key_id)"
 	gh variable set API_IRSA_ROLE_ARN --body "$$($(TF) output -raw api_irsa_role_arn)"
 	gh secret set DATABASE_URL --body "$$($(TF) output -raw database_url)"
+	gh secret set DEPLOYER_PRIVATE_KEY --body "$${DEPLOYER_PRIVATE_KEY:?set DEPLOYER_PRIVATE_KEY}"
+	gh secret set KEYCLOAK_ADMIN_PASSWORD --body "$${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}"
+	gh secret set KEYCLOAK_REALM_JSON < "$${KEYCLOAK_REALM_FILE:-.local/keycloak-realm.json}"
+	gh secret set SERVICER_CLIENT_SECRET --body "$${SERVICER_CLIENT_SECRET:?set SERVICER_CLIENT_SECRET}"
+	gh secret set ALICE_PASSWORD --body "$${ALICE_PASSWORD:?set ALICE_PASSWORD}"
+	gh secret set BOB_PASSWORD --body "$${BOB_PASSWORD:?set BOB_PASSWORD}"
 
 .PHONY: cloud-down
 cloud-down: cloud-kubeconfig

@@ -79,8 +79,52 @@ make bindings
 
 Configuration is read from environment variables.
 For hardhat and docker compose, we load env from `.env` for convenience.
-`.env.example` is ready to copy to `.env` and uses throwaway private keys for valid but unfunded addresses.
+`.env.example` is ready to copy to `.env`, but secret-like values are intentionally blank.
+Fill them locally and do not commit `.env`.
 Our application loads defaults that match `.env` but we could just as easily fail startup when the requisite env isn't present.
+
+To generate local-only values for a new machine:
+
+```bash
+cp .env.example .env
+
+export DEPLOYER_PRIVATE_KEY="0x$(openssl rand -hex 32)"
+export KEY_ENCRYPTION_MASTER_KEY="$(openssl rand -hex 32)"
+export KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+export SERVICER_CLIENT_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
+export ALICE_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+export BOB_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+
+awk \
+  -v deployer="$DEPLOYER_PRIVATE_KEY" \
+  -v master="$KEY_ENCRYPTION_MASTER_KEY" \
+  -v admin="$KEYCLOAK_ADMIN_PASSWORD" \
+  -v servicer="$SERVICER_CLIENT_SECRET" \
+  -v alice="$ALICE_PASSWORD" \
+  -v bob="$BOB_PASSWORD" \
+  '
+  /^DEPLOYER_PRIVATE_KEY=/ { print "DEPLOYER_PRIVATE_KEY=" deployer; next }
+  /^KEY_ENCRYPTION_MASTER_KEY=/ { print "KEY_ENCRYPTION_MASTER_KEY=" master; next }
+  /^KEYCLOAK_ADMIN_PASSWORD=/ { print "KEYCLOAK_ADMIN_PASSWORD=" admin; next }
+  /^SERVICER_CLIENT_SECRET=/ { print "SERVICER_CLIENT_SECRET=" servicer; next }
+  /^ALICE_PASSWORD=/ { print "ALICE_PASSWORD=" alice; next }
+  /^BOB_PASSWORD=/ { print "BOB_PASSWORD=" bob; next }
+  { print }
+  ' .env > .env.tmp && mv .env.tmp .env
+
+jq \
+  --arg servicer "$SERVICER_CLIENT_SECRET" \
+  --arg alice "$ALICE_PASSWORD" \
+  --arg bob "$BOB_PASSWORD" \
+  '
+  (.clients[] | select(.clientId == "servicer") | .secret) = $servicer |
+  (.users[] | select(.username == "alice") | .credentials[0].value) = $alice |
+  (.users[] | select(.username == "bob") | .credentials[0].value) = $bob
+  ' .local/keycloak-realm.example.json > .local/keycloak-realm.json
+```
+
+These commands require `openssl` and `jq`.
+If Keycloak is already running, recreate the local stack after changing `.local/keycloak-realm.json` so the realm import sees the new values.
 
 | Variable               | Default                             | Description                               |
 |------------------------|-------------------------------------|-------------------------------------------|
@@ -90,8 +134,8 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `CHAIN_ID`             | `1337`                              | Chain id of the Besu network              |
 | `DATABASE_URL`         | local Postgres                      | Postgres connection string                |
 | `LOAN_BASE_URI`        | local API loans URI                 | Base URI used to build loan metadata URIs |
-| `DEPLOYER_PRIVATE_KEY` | throwaway dev key                   | In-app transaction signer key             |
-| `KEY_ENCRYPTION_MASTER_KEY` | throwaway dev key              | AES-256 master key encrypting custodial signing keys at rest |
+| `DEPLOYER_PRIVATE_KEY` | required locally / GitHub Secret in cloud | In-app transaction signer key             |
+| `KEY_ENCRYPTION_MASTER_KEY` | required locally; unused by cloud KMS | AES-256 master key encrypting custodial signing keys at rest |
 | `OIDC_ISSUER_URL`      | local Keycloak realm                | Expected token issuer                     |
 | `OIDC_JWKS_URL`        | derived from issuer                 | Where the API fetches signing keys (compose overrides to the service-network URL) |
 | `OIDC_AUDIENCE`        | `loan-notes-api`                    | Expected token audience                   |
@@ -99,6 +143,9 @@ Our application loads defaults that match `.env` but we could just as easily fai
 | `RECONCILE_INTERVAL_SECONDS` | `5`                           | How often the reconciler drains pending chain operations |
 | `KEY_ENCRYPTOR`        | `local-aes-gcm`                     | Signing-key encryption backend: `local-aes-gcm` or `aws-kms` |
 | `KMS_KEY_ID`           | —                                   | KMS key id, required when `KEY_ENCRYPTOR=aws-kms`          |
+| `SERVICER_CLIENT_SECRET` | required for demo                 | Keycloak service-client secret used by `cmd/demo` |
+| `ALICE_PASSWORD`       | required for demo                   | Demo lender password used by `cmd/demo` |
+| `BOB_PASSWORD`         | required for demo                   | Demo lender password used by `cmd/demo` |
 
 The API signs Ethereum transactions in-process with `DEPLOYER_PRIVATE_KEY` and submits them through `go-ethereum`'s `client.SendTransaction`, which uses `eth_sendRawTransaction` under the hood.
 
@@ -113,7 +160,8 @@ Pool keys sign lifecycle operations only — warehouse custody stays with the pr
 ## Authentication
 
 Every endpoint except the system ones (`/`, `/healthz`, `/ready`, `/swagger`) requires an OIDC bearer token.
-The compose stack ships a [Keycloak](https://www.keycloak.org/) instance with a seeded `loan-notes` realm (`.local/keycloak-realm.json`), so the full authenticated flow runs offline:
+The compose stack runs [Keycloak](https://www.keycloak.org/) with a seeded `loan-notes` realm.
+The concrete realm file is local-only and ignored by git; start from `.local/keycloak-realm.example.json`, write `.local/keycloak-realm.json`, and make its values match your `.env` demo credentials:
 
 - a `servicer` service client (client-credentials grant) whose service account holds the `servicer` and `admin` realm roles
 - two demo lender users, `alice` and `bob` (password grant via the public `loan-notes-app` client), with no roles
@@ -137,7 +185,7 @@ Example token fetch against the dev realm:
 
 ```bash
 curl -s http://localhost:8081/realms/loan-notes/protocol/openid-connect/token \
-  -d 'grant_type=password&client_id=loan-notes-app&username=alice&password=alice-password'
+  -d "grant_type=password&client_id=loan-notes-app&username=alice&password=${ALICE_PASSWORD}"
 ```
 
 ## Identities and custodial keys
@@ -229,6 +277,7 @@ make cloud-down       # tear everything down
 ```
 
 `cloud-deploy` runs in two phases because token issuers must match what callers see: the first install brings everything up behind LoadBalancers, and the second pass sets `OIDC_ISSUER_URL` and `LOAN_BASE_URI` to the LB hostnames once they exist.
+Manual cloud deploys require `DEPLOYER_PRIVATE_KEY`, `KEYCLOAK_ADMIN_PASSWORD`, and a realm file at `.local/keycloak-realm.json` or `KEYCLOAK_REALM_FILE`.
 JWKS is still fetched over the cluster network — the same issuer/JWKS split used in docker-compose.
 
 Terraform targets new EKS clusters at Kubernetes `1.36`. Existing EKS clusters must be upgraded one minor version at a time; use `make cloud-upgrade-k8s-from-1-31` for the current production cluster before relying on the default `make cloud-up` target. The target applies `1.32`, `1.33`, `1.34`, `1.35`, then `1.36` in order so AWS does not reject a direct minor-version jump.
@@ -249,6 +298,7 @@ Set `KUBERNETES_VERSION=1.31` before merging the Terraform workflow if you want 
 
 `.github/workflows/deploy.yml` deploys every push to `main`: build and push to ECR, `helm upgrade`, then the full demo runs against the deployment as a smoke test.
 It reads the repo variables/secrets seeded by `make cloud-ci-config`, using the `github-actions-deployer` IAM user credentials stored as repo secrets.
+Secret-like deployment inputs live in GitHub Secrets, not in tracked files: `DATABASE_URL`, `DEPLOYER_PRIVATE_KEY`, `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_REALM_JSON`, `SERVICER_CLIENT_SECRET`, `ALICE_PASSWORD`, and `BOB_PASSWORD`.
 This workflow deploys application changes only; infrastructure changes are handled by the separate Terraform workflow.
 
 ## CI

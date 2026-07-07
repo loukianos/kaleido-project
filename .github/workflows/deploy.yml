@@ -44,16 +44,26 @@ jobs:
           docker push --all-tags "${{ vars.ECR_REPOSITORY_URL }}"
 
       - name: Deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          KEYCLOAK_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
+          KEYCLOAK_REALM_JSON: ${{ secrets.KEYCLOAK_REALM_JSON }}
         run: |
+          REALM_FILE="$(mktemp)"
+          printf '%s' "$KEYCLOAK_REALM_JSON" > "$REALM_FILE"
+
           aws eks update-kubeconfig --region "${{ vars.AWS_REGION }}" --name "${{ vars.EKS_CLUSTER_NAME }}"
           helm upgrade --install kaleido deploy/chart -n kaleido --create-namespace \
             --set image.repository="${{ vars.ECR_REPOSITORY_URL }}" \
             --set image.tag="${GITHUB_SHA::7}" \
-            --set databaseUrl="${{ secrets.DATABASE_URL }}" \
+            --set databaseUrl="$DATABASE_URL" \
+            --set deployerPrivateKey="$DEPLOYER_PRIVATE_KEY" \
+            --set keycloak.adminPassword="$KEYCLOAK_ADMIN_PASSWORD" \
             --set kmsKeyId="${{ vars.KMS_KEY_ID }}" \
             --set irsaRoleArn="${{ vars.API_IRSA_ROLE_ARN }}" \
             --set awsRegion="${{ vars.AWS_REGION }}" \
-            --set-file keycloak.realmJson=.local/keycloak-realm.json \
+            --set-file keycloak.realmJson="$REALM_FILE" \
             --wait --timeout 10m
           API_LB="$(kubectl get svc kaleido-api -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
           KC_LB="$(kubectl get svc kaleido-keycloak -n kaleido -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
@@ -69,4 +79,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Smoke test (full demo against the deployment)
+        env:
+          SERVICER_CLIENT_SECRET: ${{ secrets.SERVICER_CLIENT_SECRET }}
+          ALICE_PASSWORD: ${{ secrets.ALICE_PASSWORD }}
+          BOB_PASSWORD: ${{ secrets.BOB_PASSWORD }}
         run: go run ./cmd/demo

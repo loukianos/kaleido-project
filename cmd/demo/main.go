@@ -45,10 +45,22 @@ func run() error {
 	// Every actor authenticates against the seeded Keycloak realm: the servicer via client credentials, lenders via password grants.
 	fmt.Println("Fetching tokens from", keycloakURL)
 	tokenURL := keycloakURL + "/realms/" + getenv("KEYCLOAK_REALM", "loan-notes") + "/protocol/openid-connect/token"
+	servicerClientSecret, err := requiredEnv("SERVICER_CLIENT_SECRET")
+	if err != nil {
+		return err
+	}
+	alicePassword, err := requiredEnv("ALICE_PASSWORD")
+	if err != nil {
+		return err
+	}
+	bobPassword, err := requiredEnv("BOB_PASSWORD")
+	if err != nil {
+		return err
+	}
 	servicerToken, err := fetchToken(httpClient, tokenURL, url.Values{
 		"grant_type":    {"client_credentials"},
 		"client_id":     {getenv("SERVICER_CLIENT_ID", "servicer")},
-		"client_secret": {getenv("SERVICER_CLIENT_SECRET", "servicer-secret")},
+		"client_secret": {servicerClientSecret},
 	})
 	if err != nil {
 		return fmt.Errorf("servicer login: %w", err)
@@ -57,7 +69,7 @@ func run() error {
 		"grant_type": {"password"},
 		"client_id":  {getenv("LENDER_CLIENT_ID", "loan-notes-app")},
 		"username":   {"alice"},
-		"password":   {getenv("ALICE_PASSWORD", "alice-password")},
+		"password":   {alicePassword},
 	})
 	if err != nil {
 		return fmt.Errorf("alice login: %w", err)
@@ -66,7 +78,7 @@ func run() error {
 		"grant_type": {"password"},
 		"client_id":  {getenv("LENDER_CLIENT_ID", "loan-notes-app")},
 		"username":   {"bob"},
-		"password":   {getenv("BOB_PASSWORD", "bob-password")},
+		"password":   {bobPassword},
 	})
 	if err != nil {
 		return fmt.Errorf("bob login: %w", err)
@@ -516,4 +528,12 @@ func (c client) doStatus(req *http.Request, out any) (int, error) {
 
 func getenv(key, fallback string) string {
 	return cmp.Or(os.Getenv(key), fallback)
+}
+
+func requiredEnv(key string) (string, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return "", fmt.Errorf("%s must be set", key)
+	}
+	return value, nil
 }

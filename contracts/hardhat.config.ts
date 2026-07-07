@@ -5,10 +5,9 @@ import dotenv from "dotenv";
 dotenv.config({ path: "../.env" });
 
 const RPC_URL = process.env.ETH_RPC_URL ?? "http://127.0.0.1:31545";
-// Throwaway dev key by default
+// Deterministic local-only fallback; set DEPLOYER_PRIVATE_KEY for real deploys.
 const DEPLOYER_PRIVATE_KEY =
-  process.env.DEPLOYER_PRIVATE_KEY ??
-  "0x8f2a55949038a9610f50fb23b5883af3b4ecb3c3bb792cbcefbd1542c692be63";
+  process.env.DEPLOYER_PRIVATE_KEY ?? `0x${"1".repeat(64)}`;
 
 export default defineConfig({
   plugins: [hardhatToolboxMochaEthers],
